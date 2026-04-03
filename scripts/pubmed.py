@@ -754,7 +754,8 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                 {
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
-                    "record_count": str(len(pmids)),
+                    "pmid_count": str(len(pmids)),
+                    "record_count": str(len(records)),
                     "status": "success",
                     "error": "",
                 }
@@ -767,7 +768,8 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                     "description": topic.get("description", ""),
                     "topic_query": topic.get("topic_query", ""),
                     "full_query": topic.get("full_query", ""),
-                    "record_count": len(pmids),
+                    "pmid_count": len(pmids),
+                    "record_count": len(records),
                     "status": "success",
                 },
             )
@@ -788,6 +790,7 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                 {
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
+                    "pmid_count": "0",
                     "record_count": "0",
                     "status": "failed",
                     "error": message,
@@ -801,6 +804,7 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                     "description": topic.get("description", ""),
                     "topic_query": topic.get("topic_query", ""),
                     "full_query": topic.get("full_query", ""),
+                    "pmid_count": 0,
                     "record_count": 0,
                     "status": "failed",
                     "error": message,
@@ -817,7 +821,7 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
     write_csv(
         args.output_dir / "topic_summary.csv",
         summary_rows,
-        ["topic_id", "topic_label", "record_count", "status", "error"],
+        ["topic_id", "topic_label", "pmid_count", "record_count", "status", "error"],
     )
     write_json(
         args.output_dir / DEFAULT_CACHE_DIRNAME / "README.json",

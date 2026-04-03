@@ -19,9 +19,15 @@ Each topic entry contains:
 ## Notes
 
 - `full_query` is the query that retrieval code should use by default.
-- The publication-type exclusions are intentionally conservative and should be treated as a first-pass filter only.
+- The publication-type exclusions are intentionally conservative and include `Case Reports`; they should be treated as a first-pass filter only.
 - Some non-research records may still slip through due to PubMed metadata inconsistency, so downstream validation should remain enabled.
 - Some true research articles may still require query refinement after sampling early retrieval results.
+
+## Output counts
+
+- Topic-level summaries may expose both `pmid_count` and `record_count`.
+- `pmid_count` is the number of PubMed IDs retrieved before runtime filtering.
+- `record_count` is the number of rows actually written after runtime filtering.
 
 ## Expected next step
 
