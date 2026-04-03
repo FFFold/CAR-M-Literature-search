@@ -23,6 +23,36 @@ REQUEST_RETRIES = 3
 REQUEST_SLEEP_SECONDS = 0.34
 DEFAULT_OUTPUT_DIR = Path("output") / "pubmed_raw"
 DEFAULT_CONFIG_PATH = Path("config") / "queries.json"
+NON_RESEARCH_PUBLICATION_TYPES = {
+    "review",
+    "systematic review",
+    "meta-analysis",
+    "editorial",
+    "comment",
+    "letter",
+    "news",
+    "biography",
+    "interview",
+    "lecture",
+    "guideline",
+    "practice guideline",
+    "consensus development conference",
+    "consensus development conference, nih",
+    "historical article",
+    "published erratum",
+    "retraction of publication",
+    "duplicate publication",
+    "case reports",
+}
+NON_RESEARCH_TITLE_TERMS = (
+    "review",
+    "editorial",
+    "commentary",
+    "comment",
+    "perspective",
+    "perspectives",
+    "guideline",
+)
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -145,6 +175,19 @@ def normalize_journal_name(value: str) -> str:
     cleaned = normalize_whitespace(value)
     cleaned = re.sub(r"[\.,:;()\[\]]", "", cleaned)
     return cleaned.lower()
+
+
+def is_likely_research_record(title: str, publication_types: str) -> bool:
+    normalized_types = {
+        normalize_whitespace(item).lower()
+        for item in publication_types.split(";")
+        if normalize_whitespace(item)
+    }
+    if normalized_types & NON_RESEARCH_PUBLICATION_TYPES:
+        return False
+
+    title_lower = normalize_whitespace(title).lower()
+    return not any(term in title_lower for term in NON_RESEARCH_TITLE_TERMS)
 
 
 def fetch_url(url: str) -> bytes:
@@ -420,10 +463,15 @@ def collect_topic_records(
                 "mesh_terms": detail.get("mesh_terms", ""),
                 "publication_types": detail.get("publication_types", ""),
                 "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                "source_query": query,
+                "source_query_id": topic["id"],
+                "source_query_label": topic["label"],
                 "matched_topics": topic["id"],
                 "matched_topic_labels": topic["label"],
             }
+            if not is_likely_research_record(
+                record["title"], record["publication_types"]
+            ):
+                continue
             records[pmid] = record
 
     return pmids, records
@@ -460,8 +508,6 @@ def merge_topic_records(
                 "publication_types"
             ):
                 existing["publication_types"] = record["publication_types"]
-            if not existing.get("source_query"):
-                existing["source_query"] = record.get("source_query", "")
 
     return sorted(
         merged.values(),
@@ -523,7 +569,8 @@ def output_fieldnames() -> List[str]:
         "pubmed_url",
         "matched_topics",
         "matched_topic_labels",
-        "source_query",
+        "source_query_id",
+        "source_query_label",
     ]
 
 
@@ -550,6 +597,17 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                 "topic_label": topic["label"],
                 "record_count": str(len(pmids)),
             }
+        )
+        write_json(
+            args.output_dir / "topics" / f"{topic['id']}_meta.json",
+            {
+                "topic_id": topic["id"],
+                "topic_label": topic["label"],
+                "description": topic.get("description", ""),
+                "topic_query": topic.get("topic_query", ""),
+                "full_query": topic.get("full_query", ""),
+                "record_count": len(pmids),
+            },
         )
         write_json(args.output_dir / "topics" / f"{topic['id']}_pmids.json", pmids)
         write_json(
