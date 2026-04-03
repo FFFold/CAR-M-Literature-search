@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -16,13 +17,22 @@ from urllib.request import urlopen
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 ENV_KEY_NAMES = ("NCBI_API_KEY", "EUTILS_API_KEY", "API_KEY")
-TIMEOUT_SECONDS = 30
+PROXY_KEY_NAMES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+)
+TIMEOUT_SECONDS = 90
 SEARCH_BATCH_SIZE = 500
 FETCH_BATCH_SIZE = 200
 REQUEST_RETRIES = 3
 REQUEST_SLEEP_SECONDS = 0.34
 DEFAULT_OUTPUT_DIR = Path("output") / "pubmed_raw"
 DEFAULT_CONFIG_PATH = Path("config") / "queries.json"
+DEFAULT_CACHE_DIRNAME = "cache"
 NON_RESEARCH_PUBLICATION_TYPES = {
     "review",
     "systematic review",
@@ -140,6 +150,10 @@ def load_env_file(path: Path) -> Dict[str, str]:
     return values
 
 
+def load_json_file(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def resolve_api_key(cli_api_key: Optional[str]) -> Optional[str]:
     if cli_api_key:
         return cli_api_key
@@ -160,6 +174,18 @@ def resolve_api_key(cli_api_key: Optional[str]) -> Optional[str]:
                 return value
 
     return None
+
+
+def apply_proxy_environment() -> None:
+    cwd_env = Path.cwd() / ".env"
+    project_root_env = Path(__file__).resolve().parent.parent / ".env"
+
+    for env_path in (cwd_env, project_root_env):
+        env_values = load_env_file(env_path)
+        for key_name in PROXY_KEY_NAMES:
+            value = env_values.get(key_name)
+            if value and not os.environ.get(key_name):
+                os.environ[key_name] = value
 
 
 def chunked(values: Sequence[str], size: int) -> Iterable[List[str]]:
@@ -198,7 +224,7 @@ def fetch_url(url: str) -> bytes:
                 payload = response.read()
             time.sleep(REQUEST_SLEEP_SECONDS)
             return payload
-        except (HTTPError, URLError) as exc:
+        except (HTTPError, URLError, TimeoutError) as exc:
             last_error = exc
             if attempt == REQUEST_RETRIES - 1:
                 break
@@ -210,6 +236,8 @@ def fetch_url(url: str) -> bytes:
         raise RuntimeError(
             f"PubMed API connection error: {last_error.reason}"
         ) from last_error
+    if isinstance(last_error, TimeoutError):
+        raise RuntimeError("PubMed API read timed out") from last_error
     raise RuntimeError("PubMed API request failed")
 
 
@@ -234,7 +262,7 @@ def fetch_xml(endpoint: str, params: Dict[str, str]) -> ET.Element:
 def load_topic_queries(
     config_path: Path, selected_topics: Optional[List[str]]
 ) -> List[Dict[str, str]]:
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload = load_json_file(config_path)
     topics = payload.get("topics", [])
     if not selected_topics:
         return topics
@@ -299,6 +327,77 @@ def esearch_all(
         retstart += len(page)
 
     return pmids[:target_count]
+
+
+def make_cache_key(
+    topic_id: str,
+    query: str,
+    search_batch_size: int,
+    fetch_batch_size: int,
+    max_records: Optional[int],
+) -> str:
+    raw = json.dumps(
+        {
+            "topic_id": topic_id,
+            "query": query,
+            "search_batch_size": search_batch_size,
+            "fetch_batch_size": fetch_batch_size,
+            "max_records": max_records,
+        },
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def cache_paths(output_dir: Path, topic_id: str, cache_key: str) -> Dict[str, Path]:
+    topic_cache_dir = output_dir / DEFAULT_CACHE_DIRNAME / topic_id / cache_key
+    return {
+        "root": topic_cache_dir,
+        "pmids": topic_cache_dir / "pmids.json",
+        "summary": topic_cache_dir / "summary",
+        "detail": topic_cache_dir / "detail",
+        "records": topic_cache_dir / "records.json",
+        "meta": topic_cache_dir / "meta.json",
+    }
+
+
+def load_cached_pmids(path: Path, max_records: Optional[int]) -> Optional[List[str]]:
+    if not path.is_file():
+        return None
+    cached = load_json_file(path)
+    if not isinstance(cached, list):
+        return None
+    pmids = [str(item) for item in cached]
+    if max_records is not None:
+        return pmids[:max_records]
+    return pmids
+
+
+def load_cached_mapping(path: Path) -> Optional[Dict[str, Dict]]:
+    if not path.is_file():
+        return None
+    cached = load_json_file(path)
+    if not isinstance(cached, dict):
+        return None
+    return cached
+
+
+def load_cached_records(path: Path) -> Optional[Dict[str, Dict[str, str]]]:
+    cached = load_cached_mapping(path)
+    if cached is None:
+        return None
+    return {str(key): value for key, value in cached.items()}
+
+
+def ensure_cache_dirs(paths: Dict[str, Path]) -> None:
+    paths["summary"].mkdir(parents=True, exist_ok=True)
+    paths["detail"].mkdir(parents=True, exist_ok=True)
+
+
+def batch_cache_path(base_dir: Path, batch: Sequence[str]) -> Path:
+    label = f"{batch[0]}_{batch[-1]}_{len(batch)}.json"
+    return base_dir / label
 
 
 def esummary_batch(pmids: Sequence[str], api_key: Optional[str]) -> Dict[str, Dict]:
@@ -434,14 +533,45 @@ def collect_topic_records(
     search_batch_size: int,
     fetch_batch_size: int,
     max_records: Optional[int],
+    output_dir: Path,
 ) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
     query = topic["full_query"]
-    pmids = esearch_all(query, api_key, search_batch_size, max_records)
+    cache_key = make_cache_key(
+        topic["id"],
+        query,
+        search_batch_size,
+        fetch_batch_size,
+        max_records,
+    )
+    paths = cache_paths(output_dir, topic["id"], cache_key)
+    ensure_cache_dirs(paths)
+
+    cached_records = load_cached_records(paths["records"])
+    cached_pmids = load_cached_pmids(paths["pmids"], max_records)
+    if cached_records is not None and cached_pmids is not None:
+        return cached_pmids, cached_records
+
+    pmids = cached_pmids
+    if pmids is None:
+        pmids = esearch_all(query, api_key, search_batch_size, max_records)
+        write_json(paths["pmids"], pmids)
+
     records: Dict[str, Dict[str, str]] = {}
 
     for batch in chunked(pmids, fetch_batch_size):
-        summary_map = esummary_batch(batch, api_key)
-        detail_map = efetch_batch(batch, api_key)
+        summary_cache = batch_cache_path(paths["summary"], batch)
+        detail_cache = batch_cache_path(paths["detail"], batch)
+
+        summary_map = load_cached_mapping(summary_cache)
+        if summary_map is None:
+            summary_map = esummary_batch(batch, api_key)
+            write_json(summary_cache, summary_map)
+
+        detail_map = load_cached_mapping(detail_cache)
+        if detail_map is None:
+            detail_map = efetch_batch(batch, api_key)
+            write_json(detail_cache, detail_map)
+
         for pmid in batch:
             summary = summary_map.get(pmid, {})
             detail = detail_map.get(pmid, {})
@@ -473,6 +603,21 @@ def collect_topic_records(
             ):
                 continue
             records[pmid] = record
+
+    write_json(paths["records"], records)
+    write_json(
+        paths["meta"],
+        {
+            "topic_id": topic["id"],
+            "topic_label": topic["label"],
+            "cache_key": cache_key,
+            "pmid_count": len(pmids),
+            "record_count": len(records),
+            "fetch_batch_size": fetch_batch_size,
+            "search_batch_size": search_batch_size,
+            "max_records_per_topic": max_records,
+        },
+    )
 
     return pmids, records
 
@@ -543,9 +688,20 @@ def run_direct_query(args: argparse.Namespace, api_key: Optional[str]) -> int:
         search_batch_size=args.search_batch_size,
         fetch_batch_size=args.fetch_batch_size,
         max_records=args.max_records_per_topic,
+        output_dir=args.output_dir,
     )
     rows = list(records.values())
     fieldnames = output_fieldnames()
+    write_json(
+        args.output_dir / "direct_query_meta.json",
+        {
+            "topic_id": topic["id"],
+            "topic_label": topic["label"],
+            "full_query": args.query,
+            "record_count": len(rows),
+            "status": "success",
+        },
+    )
     write_json(args.output_dir / "direct_query_pmids.json", pmids)
     write_json(args.output_dir / "direct_query_records.json", rows)
     write_csv(args.output_dir / "direct_query_records.csv", rows, fieldnames)
@@ -580,63 +736,112 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
         Tuple[Dict[str, str], List[str], Dict[str, Dict[str, str]]]
     ] = []
     summary_rows = []
+    failed_topics = []
 
     for topic in topics:
         print(f"Running topic {topic['id']}...", file=sys.stderr)
-        pmids, records = collect_topic_records(
-            topic=topic,
-            api_key=api_key,
-            search_batch_size=args.search_batch_size,
-            fetch_batch_size=args.fetch_batch_size,
-            max_records=args.max_records_per_topic,
-        )
-        topic_results.append((topic, pmids, records))
-        summary_rows.append(
-            {
-                "topic_id": topic["id"],
-                "topic_label": topic["label"],
-                "record_count": str(len(pmids)),
-            }
-        )
-        write_json(
-            args.output_dir / "topics" / f"{topic['id']}_meta.json",
-            {
-                "topic_id": topic["id"],
-                "topic_label": topic["label"],
-                "description": topic.get("description", ""),
-                "topic_query": topic.get("topic_query", ""),
-                "full_query": topic.get("full_query", ""),
-                "record_count": len(pmids),
-            },
-        )
-        write_json(args.output_dir / "topics" / f"{topic['id']}_pmids.json", pmids)
-        write_json(
-            args.output_dir / "topics" / f"{topic['id']}_records.json",
-            list(records.values()),
-        )
-        write_csv(
-            args.output_dir / "topics" / f"{topic['id']}_records.csv",
-            list(records.values()),
-            output_fieldnames(),
-        )
+        try:
+            pmids, records = collect_topic_records(
+                topic=topic,
+                api_key=api_key,
+                search_batch_size=args.search_batch_size,
+                fetch_batch_size=args.fetch_batch_size,
+                max_records=args.max_records_per_topic,
+                output_dir=args.output_dir,
+            )
+            topic_results.append((topic, pmids, records))
+            summary_rows.append(
+                {
+                    "topic_id": topic["id"],
+                    "topic_label": topic["label"],
+                    "record_count": str(len(pmids)),
+                    "status": "success",
+                    "error": "",
+                }
+            )
+            write_json(
+                args.output_dir / "topics" / f"{topic['id']}_meta.json",
+                {
+                    "topic_id": topic["id"],
+                    "topic_label": topic["label"],
+                    "description": topic.get("description", ""),
+                    "topic_query": topic.get("topic_query", ""),
+                    "full_query": topic.get("full_query", ""),
+                    "record_count": len(pmids),
+                    "status": "success",
+                },
+            )
+            write_json(args.output_dir / "topics" / f"{topic['id']}_pmids.json", pmids)
+            write_json(
+                args.output_dir / "topics" / f"{topic['id']}_records.json",
+                list(records.values()),
+            )
+            write_csv(
+                args.output_dir / "topics" / f"{topic['id']}_records.csv",
+                list(records.values()),
+                output_fieldnames(),
+            )
+        except Exception as exc:
+            message = str(exc)
+            failed_topics.append({"topic_id": topic["id"], "error": message})
+            summary_rows.append(
+                {
+                    "topic_id": topic["id"],
+                    "topic_label": topic["label"],
+                    "record_count": "0",
+                    "status": "failed",
+                    "error": message,
+                }
+            )
+            write_json(
+                args.output_dir / "topics" / f"{topic['id']}_meta.json",
+                {
+                    "topic_id": topic["id"],
+                    "topic_label": topic["label"],
+                    "description": topic.get("description", ""),
+                    "topic_query": topic.get("topic_query", ""),
+                    "full_query": topic.get("full_query", ""),
+                    "record_count": 0,
+                    "status": "failed",
+                    "error": message,
+                },
+            )
+            print(
+                f"Topic {topic['id']} failed: {message}",
+                file=sys.stderr,
+            )
 
-    merged_rows = merge_topic_records(topic_results)
+    merged_rows = merge_topic_records(topic_results) if topic_results else []
     write_json(args.output_dir / "merged_records.json", merged_rows)
     write_csv(args.output_dir / "merged_records.csv", merged_rows, output_fieldnames())
     write_csv(
         args.output_dir / "topic_summary.csv",
         summary_rows,
-        ["topic_id", "topic_label", "record_count"],
+        ["topic_id", "topic_label", "record_count", "status", "error"],
     )
+    write_json(
+        args.output_dir / DEFAULT_CACHE_DIRNAME / "README.json",
+        {
+            "description": "Topic-level cache for PubMed retrieval. Reused across repeated runs with identical topic/query and batch parameters.",
+            "contents": {
+                "pmids": "Cached PMID lists per topic/query.",
+                "summary": "Cached esummary batch responses.",
+                "detail": "Cached efetch batch responses.",
+                "records": "Cached filtered topic records.",
+            },
+        },
+    )
+    write_json(args.output_dir / "failed_topics.json", failed_topics)
 
     print(
-        f"Retrieved {len(merged_rows)} unique PubMed records across {len(topics)} topics."
+        f"Retrieved {len(merged_rows)} unique PubMed records across {len(topic_results)} successful topics."
     )
-    return 0
+    return 0 if not failed_topics else 2
 
 
 def main() -> int:
     args = parse_args()
+    apply_proxy_environment()
     api_key = resolve_api_key(args.api_key)
 
     if args.search_batch_size <= 0 or args.fetch_batch_size <= 0:
