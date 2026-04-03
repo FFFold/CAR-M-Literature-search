@@ -1,2 +1,4 @@
 .agents/
 .env
+output/
+*/__pycache__/
