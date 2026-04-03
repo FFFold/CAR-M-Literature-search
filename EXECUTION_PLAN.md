@@ -130,7 +130,7 @@ The goal is to preserve original research while excluding clearly secondary or n
 
 ### Goal
 
-Upgrade the current `pubmed/scripts/pubmed.py` workflow from a small top-5 lookup utility into a full retrieval pipeline.
+Upgrade the current `scripts/pubmed.py` workflow from a small top-5 lookup utility into a full retrieval pipeline.
 
 ### Required capabilities
 
