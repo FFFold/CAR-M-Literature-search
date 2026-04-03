@@ -505,8 +505,19 @@ def efetch_batch(
         journal_raw = normalize_whitespace(
             article.findtext("./MedlineCitation/Article/Journal/Title", default="")
         )
+        title = normalize_whitespace(
+            article.findtext("./MedlineCitation/Article/ArticleTitle", default="")
+        )
+        doi = ""
+        for article_id in article.findall("./PubmedData/ArticleIdList/ArticleId"):
+            if article_id.attrib.get("IdType") == "doi":
+                doi = normalize_whitespace("".join(article_id.itertext()))
+                if doi:
+                    break
 
         items[pmid] = {
+            "title": title,
+            "doi": doi,
             "abstract": "\n".join(section for section in abstract_sections if section),
             "mesh_terms": "; ".join(mesh_terms),
             "publication_types": "; ".join(publication_types),
@@ -559,13 +570,7 @@ def collect_topic_records(
     records: Dict[str, Dict[str, str]] = {}
 
     for batch in chunked(pmids, fetch_batch_size):
-        summary_cache = batch_cache_path(paths["summary"], batch)
         detail_cache = batch_cache_path(paths["detail"], batch)
-
-        summary_map = load_cached_mapping(summary_cache)
-        if summary_map is None:
-            summary_map = esummary_batch(batch, api_key)
-            write_json(summary_cache, summary_map)
 
         detail_map = load_cached_mapping(detail_cache)
         if detail_map is None:
@@ -573,16 +578,13 @@ def collect_topic_records(
             write_json(detail_cache, detail_map)
 
         for pmid in batch:
-            summary = summary_map.get(pmid, {})
             detail = detail_map.get(pmid, {})
-            title = normalize_whitespace(summary.get("title", "") or "")
-            journal_raw = detail.get("journal_raw") or normalize_whitespace(
-                summary.get("fulljournalname", "") or summary.get("source", "") or ""
-            )
+            title = normalize_whitespace(detail.get("title", "") or "")
+            journal_raw = normalize_whitespace(detail.get("journal_raw", ""))
             record = {
                 "pmid": pmid,
                 "title": title,
-                "doi": extract_doi(summary),
+                "doi": detail.get("doi", ""),
                 "journal_raw": journal_raw,
                 "journal_normalized": detail.get("journal_normalized")
                 or normalize_journal_name(journal_raw),
