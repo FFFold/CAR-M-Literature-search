@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
@@ -33,6 +34,7 @@ REQUEST_SLEEP_SECONDS = 0.34
 DEFAULT_OUTPUT_DIR = Path("output") / "pubmed_raw"
 DEFAULT_CONFIG_PATH = Path("config") / "queries.json"
 DEFAULT_CACHE_DIRNAME = "cache"
+DEFAULT_QUERY_MODE = "broad"
 NON_RESEARCH_PUBLICATION_TYPES = {
     "review",
     "systematic review",
@@ -119,6 +121,12 @@ def parse_args() -> argparse.Namespace:
         dest="api_key",
         help="NCBI API key. If omitted, resolve from environment variables or .env.",
     )
+    parser.add_argument(
+        "--query-mode",
+        choices=("broad", "filtered"),
+        default=DEFAULT_QUERY_MODE,
+        help="Which configured query variant to run for topic-based retrieval.",
+    )
     return parser.parse_args()
 
 
@@ -203,17 +211,136 @@ def normalize_journal_name(value: str) -> str:
     return cleaned.lower()
 
 
-def is_likely_research_record(title: str, publication_types: str) -> bool:
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def topic_attribution(topic: Dict[str, object]) -> Dict[str, object]:
+    payload = topic.get("attribution", {})
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def attribution_terms(topic: Dict[str, object], key: str) -> Tuple[str, ...]:
+    payload = topic_attribution(topic).get(key, [])
+    if not isinstance(payload, list):
+        return ()
+    return tuple(
+        normalize_whitespace(str(item)).lower()
+        for item in payload
+        if normalize_whitespace(str(item))
+    )
+
+
+def attribution_conflict_terms(topic: Dict[str, object]) -> Dict[str, Tuple[str, ...]]:
+    payload = topic_attribution(topic).get("conflict_terms", {})
+    if not isinstance(payload, dict):
+        return {}
+    conflicts: Dict[str, Tuple[str, ...]] = {}
+    for topic_id, values in payload.items():
+        if not isinstance(values, list):
+            continue
+        conflicts[str(topic_id)] = tuple(
+            normalize_whitespace(str(item)).lower()
+            for item in values
+            if normalize_whitespace(str(item))
+        )
+    return conflicts
+
+
+def has_car_core_signal(text: str) -> bool:
+    return (
+        "chimeric antigen receptor" in text or re.search(r"\bcar\b", text) is not None
+    )
+
+
+def has_engineering_signal(text: str) -> bool:
+    engineering_terms = (
+        "engineered",
+        "modified",
+        "transduced",
+        "expressing",
+        "express",
+        "constructed",
+        "construct",
+    )
+    return any(term in text for term in engineering_terms)
+
+
+def topic_boundary_reason(
+    topic_id: str, conflict_terms: Dict[str, Tuple[str, ...]]
+) -> str:
+    if topic_id in {"car_dc", "car_mono"} and conflict_terms:
+        return "topic_boundary:other_car_context_dominant"
+    return "topic_boundary:car_t_context_dominant"
+
+
+def classify_record_filters(
+    topic: Dict[str, object], title: str, abstract: str, publication_types: str
+) -> Dict[str, str]:
+    topic_id = str(topic.get("id", ""))
     normalized_types = {
         normalize_whitespace(item).lower()
         for item in publication_types.split(";")
         if normalize_whitespace(item)
     }
-    if normalized_types & NON_RESEARCH_PUBLICATION_TYPES:
-        return False
 
     title_lower = normalize_whitespace(title).lower()
-    return not any(term in title_lower for term in NON_RESEARCH_TITLE_TERMS)
+    reasons = []
+
+    excluded_types = sorted(normalized_types & NON_RESEARCH_PUBLICATION_TYPES)
+    if excluded_types:
+        reasons.append(f"publication_type:{','.join(excluded_types)}")
+
+    hit_title_terms = sorted(
+        term for term in NON_RESEARCH_TITLE_TERMS if term in title_lower
+    )
+    if hit_title_terms:
+        reasons.append(f"title_noise:{','.join(hit_title_terms)}")
+
+    abstract_text = normalize_whitespace(abstract)
+    quality_flags = []
+    if not abstract_text:
+        quality_flags.append("missing_abstract")
+    elif len(abstract_text) < 200:
+        quality_flags.append("short_abstract")
+
+    combined_text = f"{title_lower} {abstract_text.lower()}"
+    primary_hints = attribution_terms(topic, "primary_title_abstract_phrases")
+    cell_terms = attribution_terms(topic, "secondary_cell_terms")
+    conflict_terms = attribution_conflict_terms(topic)
+    has_primary_hint = any(hint in combined_text for hint in primary_hints)
+    has_cell_term = any(term in combined_text for term in cell_terms)
+    has_broad_topic_signal = has_car_core_signal(combined_text) and has_cell_term
+    has_engineering_context = has_engineering_signal(combined_text)
+
+    if (
+        topic_id in {"car_dc", "car_mac", "car_mono"}
+        and has_cell_term
+        and not has_primary_hint
+        and not (has_broad_topic_signal and has_engineering_context)
+    ):
+        reasons.append("topic_boundary:cell_context_without_primary_car_platform")
+
+    conflict_hits = any(
+        term in combined_text for terms in conflict_terms.values() for term in terms
+    )
+    if conflict_hits and not has_primary_hint and not has_engineering_context:
+        reasons.append(topic_boundary_reason(topic_id, conflict_terms))
+
+    status = "keep"
+    if reasons:
+        status = "exclude"
+    elif quality_flags:
+        status = "review"
+
+    return {
+        "filter_status": status,
+        "filter_reason": "; ".join(reasons),
+        "record_quality_flags": "; ".join(quality_flags),
+        "needs_manual_review": "true" if status == "review" else "false",
+    }
 
 
 def fetch_url(url: str) -> bytes:
@@ -261,7 +388,7 @@ def fetch_xml(endpoint: str, params: Dict[str, str]) -> ET.Element:
 
 def load_topic_queries(
     config_path: Path, selected_topics: Optional[List[str]]
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, object]]:
     payload = load_json_file(config_path)
     topics = payload.get("topics", [])
     if not selected_topics:
@@ -287,7 +414,7 @@ def esearch_page(
         "retmode": "json",
         "retstart": str(retstart),
         "retmax": str(retmax),
-        "sort": "relevance",
+        "sort": "pub date",
     }
     if api_key:
         params["api_key"] = api_key
@@ -357,7 +484,9 @@ def cache_paths(output_dir: Path, topic_id: str, cache_key: str) -> Dict[str, Pa
         "pmids": topic_cache_dir / "pmids.json",
         "summary": topic_cache_dir / "summary",
         "detail": topic_cache_dir / "detail",
-        "records": topic_cache_dir / "records.json",
+        "raw_records": topic_cache_dir / "raw_records.json",
+        "filtered_records": topic_cache_dir / "filtered_records.json",
+        "review_records": topic_cache_dir / "review_records.json",
         "meta": topic_cache_dir / "meta.json",
     }
 
@@ -538,15 +667,93 @@ def extract_doi(entry: Dict) -> str:
     return ""
 
 
+def choose_topic_query(topic: Dict[str, object], query_mode: str) -> str:
+    if query_mode == "filtered":
+        return topic.get("filtered_query") or topic.get("broad_query") or ""
+    return topic.get("broad_query") or topic.get("filtered_query") or ""
+
+
+def build_raw_record(
+    topic: Dict[str, object], query: str, pmid: str, detail: Dict[str, str]
+) -> Dict[str, str]:
+    title = normalize_whitespace(detail.get("title", "") or "")
+    journal_raw = normalize_whitespace(detail.get("journal_raw", ""))
+    record = {
+        "pmid": pmid,
+        "title": title,
+        "doi": detail.get("doi", ""),
+        "journal_raw": journal_raw,
+        "journal_normalized": detail.get("journal_normalized")
+        or normalize_journal_name(journal_raw),
+        "publication_date_raw": detail.get("publication_date_raw", ""),
+        "publication_year": detail.get("publication_year", ""),
+        "publication_month": detail.get("publication_month", ""),
+        "abstract": detail.get("abstract", ""),
+        "mesh_terms": detail.get("mesh_terms", ""),
+        "publication_types": detail.get("publication_types", ""),
+        "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+        "matched_topics": topic["id"],
+        "matched_topic_labels": topic["label"],
+        "source_query": query,
+        "source_query_id": topic["id"],
+        "source_query_label": topic["label"],
+        "filter_status": "",
+        "filter_reason": "",
+        "topic_filter_statuses": "",
+        "topic_filter_reasons": "",
+        "record_quality_flags": "",
+        "needs_manual_review": "false",
+    }
+    record.update(
+        classify_record_filters(
+            topic,
+            record["title"],
+            record["abstract"],
+            record["publication_types"],
+        )
+    )
+    record["topic_filter_statuses"] = (
+        f"{topic['id']}:{record['filter_status']}" if record["filter_status"] else ""
+    )
+    record["topic_filter_reasons"] = (
+        f"{topic['id']}:{record['filter_reason']}" if record["filter_reason"] else ""
+    )
+    return record
+
+
+def split_records_by_filter(
+    records: Dict[str, Dict[str, str]],
+) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]:
+    filtered_records: Dict[str, Dict[str, str]] = {}
+    review_records: Dict[str, Dict[str, str]] = {}
+    for pmid, record in records.items():
+        if record.get("filter_status") == "exclude":
+            continue
+        filtered_records[pmid] = record
+        if record.get("needs_manual_review") == "true":
+            review_records[pmid] = record
+    return filtered_records, review_records
+
+
 def collect_topic_records(
-    topic: Dict[str, str],
+    topic: Dict[str, object],
     api_key: Optional[str],
     search_batch_size: int,
     fetch_batch_size: int,
     max_records: Optional[int],
     output_dir: Path,
-) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
-    query = topic["full_query"]
+    query_mode: str,
+) -> Tuple[
+    List[str],
+    Dict[str, Dict[str, str]],
+    Dict[str, Dict[str, str]],
+    Dict[str, Dict[str, str]],
+    str,
+]:
+    query = choose_topic_query(topic, query_mode)
+    if not query:
+        raise RuntimeError(f"Topic {topic['id']} does not define a usable query")
+
     cache_key = make_cache_key(
         topic["id"],
         query,
@@ -557,17 +764,30 @@ def collect_topic_records(
     paths = cache_paths(output_dir, topic["id"], cache_key)
     ensure_cache_dirs(paths)
 
-    cached_records = load_cached_records(paths["records"])
+    cached_raw_records = load_cached_records(paths["raw_records"])
+    cached_filtered_records = load_cached_records(paths["filtered_records"])
+    cached_review_records = load_cached_records(paths["review_records"])
     cached_pmids = load_cached_pmids(paths["pmids"], max_records)
-    if cached_records is not None and cached_pmids is not None:
-        return cached_pmids, cached_records
+    if (
+        cached_raw_records is not None
+        and cached_filtered_records is not None
+        and cached_review_records is not None
+        and cached_pmids is not None
+    ):
+        return (
+            cached_pmids,
+            cached_raw_records,
+            cached_filtered_records,
+            cached_review_records,
+            query,
+        )
 
     pmids = cached_pmids
     if pmids is None:
         pmids = esearch_all(query, api_key, search_batch_size, max_records)
         write_json(paths["pmids"], pmids)
 
-    records: Dict[str, Dict[str, str]] = {}
+    raw_records: Dict[str, Dict[str, str]] = {}
 
     for batch in chunked(pmids, fetch_batch_size):
         detail_cache = batch_cache_path(paths["detail"], batch)
@@ -579,54 +799,38 @@ def collect_topic_records(
 
         for pmid in batch:
             detail = detail_map.get(pmid, {})
-            title = normalize_whitespace(detail.get("title", "") or "")
-            journal_raw = normalize_whitespace(detail.get("journal_raw", ""))
-            record = {
-                "pmid": pmid,
-                "title": title,
-                "doi": detail.get("doi", ""),
-                "journal_raw": journal_raw,
-                "journal_normalized": detail.get("journal_normalized")
-                or normalize_journal_name(journal_raw),
-                "publication_date_raw": detail.get("publication_date_raw", ""),
-                "publication_year": detail.get("publication_year", ""),
-                "publication_month": detail.get("publication_month", ""),
-                "abstract": detail.get("abstract", ""),
-                "mesh_terms": detail.get("mesh_terms", ""),
-                "publication_types": detail.get("publication_types", ""),
-                "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                "source_query_id": topic["id"],
-                "source_query_label": topic["label"],
-                "matched_topics": topic["id"],
-                "matched_topic_labels": topic["label"],
-            }
-            if not is_likely_research_record(
-                record["title"], record["publication_types"]
-            ):
-                continue
-            records[pmid] = record
+            raw_records[pmid] = build_raw_record(topic, query, pmid, detail)
 
-    write_json(paths["records"], records)
+    filtered_records, review_records = split_records_by_filter(raw_records)
+
+    write_json(paths["raw_records"], raw_records)
+    write_json(paths["filtered_records"], filtered_records)
+    write_json(paths["review_records"], review_records)
     write_json(
         paths["meta"],
         {
             "topic_id": topic["id"],
             "topic_label": topic["label"],
             "cache_key": cache_key,
+            "query_mode": query_mode,
+            "source_query": query,
             "pmid_count": len(pmids),
-            "record_count": len(records),
+            "raw_record_count": len(raw_records),
+            "filtered_record_count": len(filtered_records),
+            "review_record_count": len(review_records),
             "fetch_batch_size": fetch_batch_size,
             "search_batch_size": search_batch_size,
             "max_records_per_topic": max_records,
+            "retrieved_at": utc_timestamp(),
         },
     )
 
-    return pmids, records
+    return pmids, raw_records, filtered_records, review_records, query
 
 
 def merge_topic_records(
     topic_results: Sequence[
-        Tuple[Dict[str, str], List[str], Dict[str, Dict[str, str]]]
+        Tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
     ],
 ) -> List[Dict[str, str]]:
     merged: Dict[str, Dict[str, str]] = {}
@@ -655,10 +859,39 @@ def merge_topic_records(
                 "publication_types"
             ):
                 existing["publication_types"] = record["publication_types"]
+            if not existing.get("source_query") and record.get("source_query"):
+                existing["source_query"] = record["source_query"]
+            topic_filter_statuses = set(
+                filter(None, existing.get("topic_filter_statuses", "").split(";"))
+            )
+            topic_filter_statuses.update(
+                filter(None, record.get("topic_filter_statuses", "").split(";"))
+            )
+            existing["topic_filter_statuses"] = ";".join(sorted(topic_filter_statuses))
+            topic_filter_reasons = set(
+                filter(None, existing.get("topic_filter_reasons", "").split(";"))
+            )
+            topic_filter_reasons.update(
+                filter(None, record.get("topic_filter_reasons", "").split(";"))
+            )
+            existing["topic_filter_reasons"] = ";".join(sorted(topic_filter_reasons))
+            if not existing.get("record_quality_flags") and record.get(
+                "record_quality_flags"
+            ):
+                existing["record_quality_flags"] = record["record_quality_flags"]
+            if (
+                existing.get("needs_manual_review") != "true"
+                and record.get("needs_manual_review") == "true"
+            ):
+                existing["needs_manual_review"] = "true"
 
     return sorted(
         merged.values(),
-        key=lambda item: (item.get("publication_year", ""), item["pmid"]),
+        key=lambda item: (
+            item.get("publication_year", ""),
+            item.get("publication_month", ""),
+            item["pmid"],
+        ),
     )
 
 
@@ -678,36 +911,126 @@ def write_csv(
             writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
+def build_quality_summary_rows(
+    topic_results: Sequence[
+        Tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
+    ],
+    summary_rows: Sequence[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    counts_by_topic = {
+        row["topic_id"]: {
+            "pmid_count": int(row.get("pmid_count", "0") or "0"),
+            "raw_record_count": int(row.get("raw_record_count", "0") or "0"),
+            "filtered_record_count": int(row.get("filtered_record_count", "0") or "0"),
+            "review_record_count": int(row.get("review_record_count", "0") or "0"),
+            "status": row.get("status", ""),
+        }
+        for row in summary_rows
+    }
+    raw_records_by_topic = {
+        topic["id"]: (topic, raw_records) for topic, _, raw_records in topic_results
+    }
+    quality_rows: List[Dict[str, str]] = []
+
+    for row in summary_rows:
+        topic_id = row["topic_id"]
+        stats = counts_by_topic.get(topic_id, {})
+        topic_payload = raw_records_by_topic.get(topic_id)
+        topic_label = row.get("topic_label", "")
+        raw_records = topic_payload[1] if topic_payload else {}
+        doi_missing = 0
+        year_missing = 0
+        missing_abstract = 0
+        short_abstract = 0
+        exclusion_reasons: Dict[str, int] = {}
+        for record in raw_records.values():
+            if not record.get("doi"):
+                doi_missing += 1
+            if not record.get("publication_year"):
+                year_missing += 1
+            flags = set(
+                filter(None, record.get("record_quality_flags", "").split("; "))
+            )
+            if "missing_abstract" in flags:
+                missing_abstract += 1
+            if "short_abstract" in flags:
+                short_abstract += 1
+            for reason in filter(None, record.get("filter_reason", "").split("; ")):
+                exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+
+        quality_rows.append(
+            {
+                "topic_id": topic_id,
+                "topic_label": topic_label,
+                "status": stats.get("status", ""),
+                "pmid_count": str(stats.get("pmid_count", 0)),
+                "raw_record_count": str(stats.get("raw_record_count", 0)),
+                "filtered_record_count": str(stats.get("filtered_record_count", 0)),
+                "review_record_count": str(stats.get("review_record_count", 0)),
+                "doi_missing_count": str(doi_missing),
+                "publication_year_missing_count": str(year_missing),
+                "missing_abstract_count": str(missing_abstract),
+                "short_abstract_count": str(short_abstract),
+                "filter_reason_counts": json.dumps(
+                    exclusion_reasons, ensure_ascii=False, sort_keys=True
+                ),
+            }
+        )
+
+    return quality_rows
+
+
 def run_direct_query(args: argparse.Namespace, api_key: Optional[str]) -> int:
     topic = {
         "id": "direct_query",
         "label": "Direct Query",
-        "full_query": args.query,
+        "broad_query": args.query,
+        "filtered_query": args.query,
     }
-    pmids, records = collect_topic_records(
+    pmids, raw_records, filtered_records, review_records, query = collect_topic_records(
         topic=topic,
         api_key=api_key,
         search_batch_size=args.search_batch_size,
         fetch_batch_size=args.fetch_batch_size,
         max_records=args.max_records_per_topic,
         output_dir=args.output_dir,
+        query_mode=args.query_mode,
     )
-    rows = list(records.values())
+    raw_rows = list(raw_records.values())
+    filtered_rows = list(filtered_records.values())
+    review_rows = list(review_records.values())
     fieldnames = output_fieldnames()
     write_json(
         args.output_dir / "direct_query_meta.json",
         {
             "topic_id": topic["id"],
             "topic_label": topic["label"],
-            "full_query": args.query,
-            "record_count": len(rows),
+            "query_mode": args.query_mode,
+            "source_query": query,
+            "pmid_count": len(pmids),
+            "raw_record_count": len(raw_rows),
+            "filtered_record_count": len(filtered_rows),
+            "review_record_count": len(review_rows),
+            "retrieved_at": utc_timestamp(),
             "status": "success",
         },
     )
     write_json(args.output_dir / "direct_query_pmids.json", pmids)
-    write_json(args.output_dir / "direct_query_records.json", rows)
-    write_csv(args.output_dir / "direct_query_records.csv", rows, fieldnames)
-    print(f"Retrieved {len(rows)} PubMed records for direct query.")
+    write_json(args.output_dir / "direct_query_raw_records.json", raw_rows)
+    write_json(args.output_dir / "direct_query_filtered_records.json", filtered_rows)
+    write_json(args.output_dir / "direct_query_review_records.json", review_rows)
+    write_csv(args.output_dir / "direct_query_raw_records.csv", raw_rows, fieldnames)
+    write_csv(
+        args.output_dir / "direct_query_filtered_records.csv",
+        filtered_rows,
+        fieldnames,
+    )
+    write_csv(
+        args.output_dir / "direct_query_review_records.csv",
+        review_rows,
+        fieldnames,
+    )
+    print(f"Retrieved {len(filtered_rows)} filtered PubMed records for direct query.")
     return 0
 
 
@@ -727,37 +1050,58 @@ def output_fieldnames() -> List[str]:
         "pubmed_url",
         "matched_topics",
         "matched_topic_labels",
+        "source_query",
         "source_query_id",
         "source_query_label",
+        "filter_status",
+        "filter_reason",
+        "topic_filter_statuses",
+        "topic_filter_reasons",
+        "record_quality_flags",
+        "needs_manual_review",
     ]
 
 
 def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
     topics = load_topic_queries(args.config, args.topics)
     topic_results: List[
-        Tuple[Dict[str, str], List[str], Dict[str, Dict[str, str]]]
+        Tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
+    ] = []
+    raw_topic_results: List[
+        Tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
+    ] = []
+    review_topic_results: List[
+        Tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
     ] = []
     summary_rows = []
     failed_topics = []
+    run_started_at = utc_timestamp()
 
     for topic in topics:
         print(f"Running topic {topic['id']}...", file=sys.stderr)
         try:
-            pmids, records = collect_topic_records(
-                topic=topic,
-                api_key=api_key,
-                search_batch_size=args.search_batch_size,
-                fetch_batch_size=args.fetch_batch_size,
-                max_records=args.max_records_per_topic,
-                output_dir=args.output_dir,
+            pmids, raw_records, filtered_records, review_records, query = (
+                collect_topic_records(
+                    topic=topic,
+                    api_key=api_key,
+                    search_batch_size=args.search_batch_size,
+                    fetch_batch_size=args.fetch_batch_size,
+                    max_records=args.max_records_per_topic,
+                    output_dir=args.output_dir,
+                    query_mode=args.query_mode,
+                )
             )
-            topic_results.append((topic, pmids, records))
+            raw_topic_results.append((topic, pmids, raw_records))
+            topic_results.append((topic, pmids, filtered_records))
+            review_topic_results.append((topic, pmids, review_records))
             summary_rows.append(
                 {
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
                     "pmid_count": str(len(pmids)),
-                    "record_count": str(len(records)),
+                    "raw_record_count": str(len(raw_records)),
+                    "filtered_record_count": str(len(filtered_records)),
+                    "review_record_count": str(len(review_records)),
                     "status": "success",
                     "error": "",
                 }
@@ -768,21 +1112,44 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
                     "description": topic.get("description", ""),
-                    "topic_query": topic.get("topic_query", ""),
-                    "full_query": topic.get("full_query", ""),
+                    "query_mode": args.query_mode,
+                    "broad_query": topic.get("broad_query", ""),
+                    "filtered_query": topic.get("filtered_query", ""),
+                    "source_query": query,
                     "pmid_count": len(pmids),
-                    "record_count": len(records),
+                    "raw_record_count": len(raw_records),
+                    "filtered_record_count": len(filtered_records),
+                    "review_record_count": len(review_records),
+                    "retrieved_at": utc_timestamp(),
                     "status": "success",
                 },
             )
             write_json(args.output_dir / "topics" / f"{topic['id']}_pmids.json", pmids)
             write_json(
-                args.output_dir / "topics" / f"{topic['id']}_records.json",
-                list(records.values()),
+                args.output_dir / "topics" / f"{topic['id']}_raw_records.json",
+                list(raw_records.values()),
+            )
+            write_json(
+                args.output_dir / "topics" / f"{topic['id']}_filtered_records.json",
+                list(filtered_records.values()),
+            )
+            write_json(
+                args.output_dir / "topics" / f"{topic['id']}_review_records.json",
+                list(review_records.values()),
             )
             write_csv(
-                args.output_dir / "topics" / f"{topic['id']}_records.csv",
-                list(records.values()),
+                args.output_dir / "topics" / f"{topic['id']}_raw_records.csv",
+                list(raw_records.values()),
+                output_fieldnames(),
+            )
+            write_csv(
+                args.output_dir / "topics" / f"{topic['id']}_filtered_records.csv",
+                list(filtered_records.values()),
+                output_fieldnames(),
+            )
+            write_csv(
+                args.output_dir / "topics" / f"{topic['id']}_review_records.csv",
+                list(review_records.values()),
                 output_fieldnames(),
             )
         except Exception as exc:
@@ -793,7 +1160,9 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
                     "pmid_count": "0",
-                    "record_count": "0",
+                    "raw_record_count": "0",
+                    "filtered_record_count": "0",
+                    "review_record_count": "0",
                     "status": "failed",
                     "error": message,
                 }
@@ -804,10 +1173,14 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                     "topic_id": topic["id"],
                     "topic_label": topic["label"],
                     "description": topic.get("description", ""),
-                    "topic_query": topic.get("topic_query", ""),
-                    "full_query": topic.get("full_query", ""),
+                    "query_mode": args.query_mode,
+                    "broad_query": topic.get("broad_query", ""),
+                    "filtered_query": topic.get("filtered_query", ""),
                     "pmid_count": 0,
-                    "record_count": 0,
+                    "raw_record_count": 0,
+                    "filtered_record_count": 0,
+                    "review_record_count": 0,
+                    "retrieved_at": utc_timestamp(),
                     "status": "failed",
                     "error": message,
                 },
@@ -817,13 +1190,63 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                 file=sys.stderr,
             )
 
-    merged_rows = merge_topic_records(topic_results) if topic_results else []
-    write_json(args.output_dir / "merged_records.json", merged_rows)
-    write_csv(args.output_dir / "merged_records.csv", merged_rows, output_fieldnames())
+    merged_raw_rows = (
+        merge_topic_records(raw_topic_results) if raw_topic_results else []
+    )
+    merged_filtered_rows = merge_topic_records(topic_results) if topic_results else []
+    merged_review_rows = (
+        merge_topic_records(review_topic_results) if review_topic_results else []
+    )
+    write_json(args.output_dir / "merged_raw_records.json", merged_raw_rows)
+    write_json(args.output_dir / "merged_filtered_records.json", merged_filtered_rows)
+    write_json(args.output_dir / "manual_review_records.json", merged_review_rows)
+    write_csv(
+        args.output_dir / "merged_raw_records.csv",
+        merged_raw_rows,
+        output_fieldnames(),
+    )
+    write_csv(
+        args.output_dir / "merged_filtered_records.csv",
+        merged_filtered_rows,
+        output_fieldnames(),
+    )
+    write_csv(
+        args.output_dir / "manual_review_records.csv",
+        merged_review_rows,
+        output_fieldnames(),
+    )
     write_csv(
         args.output_dir / "topic_summary.csv",
         summary_rows,
-        ["topic_id", "topic_label", "pmid_count", "record_count", "status", "error"],
+        [
+            "topic_id",
+            "topic_label",
+            "pmid_count",
+            "raw_record_count",
+            "filtered_record_count",
+            "review_record_count",
+            "status",
+            "error",
+        ],
+    )
+    quality_summary_rows = build_quality_summary_rows(raw_topic_results, summary_rows)
+    write_csv(
+        args.output_dir / "retrieval_quality_summary.csv",
+        quality_summary_rows,
+        [
+            "topic_id",
+            "topic_label",
+            "status",
+            "pmid_count",
+            "raw_record_count",
+            "filtered_record_count",
+            "review_record_count",
+            "doi_missing_count",
+            "publication_year_missing_count",
+            "missing_abstract_count",
+            "short_abstract_count",
+            "filter_reason_counts",
+        ],
     )
     write_json(
         args.output_dir / DEFAULT_CACHE_DIRNAME / "README.json",
@@ -833,14 +1256,34 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
                 "pmids": "Cached PMID lists per topic/query.",
                 "summary": "Cached esummary batch responses.",
                 "detail": "Cached efetch batch responses.",
-                "records": "Cached filtered topic records.",
+                "raw_records": "Cached normalized topic records before filtering.",
+                "filtered_records": "Cached topic records kept after filtering.",
+                "review_records": "Cached kept topic records flagged for manual review.",
             },
         },
     )
     write_json(args.output_dir / "failed_topics.json", failed_topics)
+    write_json(
+        args.output_dir / "run_manifest.json",
+        {
+            "started_at": run_started_at,
+            "completed_at": utc_timestamp(),
+            "config_path": str(args.config),
+            "query_mode": args.query_mode,
+            "selected_topics": args.topics or [],
+            "search_batch_size": args.search_batch_size,
+            "fetch_batch_size": args.fetch_batch_size,
+            "max_records_per_topic": args.max_records_per_topic,
+            "successful_topic_count": len(topic_results),
+            "failed_topic_count": len(failed_topics),
+            "merged_raw_record_count": len(merged_raw_rows),
+            "merged_filtered_record_count": len(merged_filtered_rows),
+            "manual_review_record_count": len(merged_review_rows),
+        },
+    )
 
     print(
-        f"Retrieved {len(merged_rows)} unique PubMed records across {len(topic_results)} successful topics."
+        f"Retrieved {len(merged_filtered_rows)} filtered unique PubMed records across {len(topic_results)} successful topics."
     )
     return 0 if not failed_topics else 2
 
