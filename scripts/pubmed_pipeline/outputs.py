@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from .filters import apply_record_filters
 from .records import base_record_fieldnames
+from .utils import normalize_whitespace
 
 
 def output_fieldnames() -> List[str]:
@@ -28,11 +28,16 @@ def write_csv(
 
 
 def build_quality_summary_rows(
-    topic_results: Sequence[
+    screened_topic_results: Sequence[
         tuple[Dict[str, object], List[str], Dict[str, Dict[str, str]]]
     ],
     summary_rows: Sequence[Dict[str, str]],
 ) -> List[Dict[str, str]]:
+    """Build quality summary from already-screened records.
+
+    Uses the filter_status/filter_reason/record_quality_flags that were already
+    computed during the pipeline, instead of re-running apply_record_filters().
+    """
     counts_by_topic = {
         row["topic_id"]: {
             "pmid_count": int(row.get("pmid_count", "0") or "0"),
@@ -43,43 +48,45 @@ def build_quality_summary_rows(
         }
         for row in summary_rows
     }
-    raw_records_by_topic = {
-        str(topic["id"]): (topic, raw_records)
-        for topic, _, raw_records in topic_results
+    screened_records_by_topic = {
+        str(topic["id"]): records for topic, _, records in screened_topic_results
     }
     quality_rows: List[Dict[str, str]] = []
 
     for row in summary_rows:
         topic_id = row["topic_id"]
         stats = counts_by_topic.get(topic_id, {})
-        topic_payload = raw_records_by_topic.get(topic_id)
         topic_label = row.get("topic_label", "")
-        if topic_payload:
-            topic, raw_records = topic_payload
-        else:
-            topic, raw_records = ({"id": topic_id}, {})
+        records = screened_records_by_topic.get(topic_id, {})
 
         doi_missing = 0
         year_missing = 0
         missing_abstract = 0
         short_abstract = 0
         exclusion_reasons: Dict[str, int] = {}
-        for record in raw_records.values():
+
+        for record in records.values():
             if not record.get("doi"):
                 doi_missing += 1
             if not record.get("publication_year"):
                 year_missing += 1
 
-            filter_payload = apply_record_filters(topic, record)
             flags = set(
-                filter(None, filter_payload.get("record_quality_flags", "").split("; "))
+                filter(
+                    None,
+                    normalize_whitespace(record.get("record_quality_flags", "")).split(
+                        "; "
+                    ),
+                )
             )
             if "missing_abstract" in flags:
                 missing_abstract += 1
             if "short_abstract" in flags:
                 short_abstract += 1
+
             for reason in filter(
-                None, filter_payload.get("filter_reason", "").split("; ")
+                None,
+                normalize_whitespace(record.get("filter_reason", "")).split("; "),
             ):
                 exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
 

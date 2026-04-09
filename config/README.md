@@ -6,7 +6,7 @@ This directory stores the canonical PubMed query definitions used by the CAR lit
 
 - `queries.json`: topic-level query definitions and shared filtering blocks.
 
-## Current design
+## Current design (version 3)
 
 Each topic entry contains:
 
@@ -16,32 +16,32 @@ Each topic entry contains:
 - `query_notes`: rationale for the query design
 - `must_hit_examples`: manual validation reminders for sentinel papers
 - `broad_query`: default high-recall retrieval query
-- `filtered_query`: optional narrower query that bakes in first-pass exclusions
-- `attribution.primary_title_abstract_phrases`: strong evidence phrases for post-retrieval topic attribution
-- `attribution.secondary_cell_terms`: weaker lineage terms used for boundary checks
-- `attribution.mesh_support_terms`: MeSH support terms used as secondary evidence
-- `attribution.conflict_terms`: other topic phrases used to detect cross-topic dominance
+- `filtered_query`: optional narrower query that bakes in publication-type exclusions
+
+## Query strategy
+
+Each topic's `broad_query` is built from two parts combined with OR:
+
+1. **Exact compound phrases**: direct matches like `"CAR-DC"`, `"CAR macrophage"`, etc.
+2. **AND clause**: `"chimeric antigen receptor"[Title/Abstract] AND <cell-type terms>[Title/Abstract]`
+
+The AND clause uses the full phrase "chimeric antigen receptor" rather than the abbreviation "CAR" to avoid noise from the 50,000+ unrelated PubMed records that match "CAR" alone.
 
 ## Notes
 
 - `broad_query` is the default query the retrieval script should use.
 - `filtered_query` remains available for exploratory runs, but should not replace downstream record-level filtering.
 - Query-time publication-type exclusions are intentionally conservative and should be treated as a first-pass narrowing tool rather than the primary research filter.
-- Topic attribution rules now live in this config file instead of being hardcoded in `scripts/pubmed.py`.
+- Topic attribution and boundary classification are deferred to a downstream classification subagent. They are not performed during retrieval.
 - Some non-research records may still slip through due to PubMed metadata inconsistency, so downstream validation should remain enabled.
-- Some true research articles may still require query refinement after sampling early retrieval results.
 
 ## Output counts
 
-- Topic-level summaries may expose `pmid_count`, `raw_record_count`, `filtered_record_count`, and `review_record_count`.
+- Topic-level summaries expose `pmid_count`, `raw_record_count`, `filtered_record_count`, and `review_record_count`.
 - `pmid_count` is the number of PubMed IDs retrieved before runtime filtering.
 - `raw_record_count` is the number of normalized rows before filtering.
 - `filtered_record_count` is the number of rows kept after runtime filtering.
 - `review_record_count` is the number of kept rows additionally flagged for manual review.
-
-## Expected next step
-
-The retrieval script should load `queries.json`, iterate over `topics`, run `broad_query` by default, and preserve raw records before applying runtime filtering.
 
 ## Runtime behavior
 

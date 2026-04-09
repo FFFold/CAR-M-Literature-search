@@ -1,17 +1,14 @@
 {
-  "version": 2,
+  "version": 3,
   "notes": {
     "scope": "PubMed full-history retrieval for CAR-DC, CAR-Mac, CAR-Mono, CAR-T, and CAR-NK research articles.",
-    "query_strategy": "Use broad_query for default high-recall retrieval, then apply downstream filtering and review routing. filtered_query remains available for narrower exploratory runs.",
+    "query_strategy": "Each topic uses a two-part OR query: (1) exact phrase matches for common compound terms, (2) 'chimeric antigen receptor' AND cell-type terms for broader recall. The AND part uses the full phrase 'chimeric antigen receptor' rather than the abbreviation 'CAR' to avoid noise from the 50,000+ unrelated PubMed records that match 'CAR' alone.",
     "research_article_policy": "Keep original research records across clinical, observational, animal, and in vitro studies while excluding clearly non-research publication types where metadata permits.",
     "caveat": "PubMed publication type metadata is imperfect. Query-time exclusion should stay conservative; downstream code must preserve auditability by retaining raw records before filtering.",
-    "mesh_policy": "MeSH terms are supporting evidence for topic attribution and review routing, not primary hard retrieval gates."
+    "version_3_changes": "Rewrote all broad_query definitions to fix severe recall failures (car_dc: 9 -> ~346, car_mono: 77 -> ~186). Removed 'CAR'[tiab] AND cell-type clauses that introduced noise. Removed engineering-verb gates from AND clauses. Removed attribution config (topic boundary classification is deferred to a downstream subagent). Removed exclude_title_noise (title substring matching has high false-positive risk)."
   },
   "shared_blocks": {
-    "car_concept_block": "(\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract] OR \"CAR\"[Title/Abstract])",
-    "legacy_t_cell_terms": "(\"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract])",
     "exclude_publication_types": "NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])",
-    "exclude_title_noise": "NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
     "default_query_mode": "broad"
   },
   "topics": [
@@ -19,277 +16,61 @@
       "id": "car_dc",
       "label": "CAR-DC",
       "description": "CAR-engineered dendritic cells and dendritic-cell-derived CAR platforms.",
-      "query_notes": "Dendritic-cell terminology is variable, so combine exact CAR-DC phrasings with broader CAR concept plus dendritic-cell concept logic.",
+      "query_notes": "Part 1: exact compound phrases (CAR-DC, CAR dendritic cell, etc.). Part 2: 'chimeric antigen receptor' full phrase AND dendritic cell terms. Together these capture papers that discuss CAR technology in a dendritic cell context regardless of exact phrasing.",
       "must_hit_examples": [
-        "Representative CAR dendritic cell engineering papers should be manually checked after each query revision.",
-        "Any paper explicitly using the phrase CAR-DC in title or abstract must be captured."
+        "Any paper explicitly using the phrase CAR-DC in title or abstract must be captured.",
+        "Papers discussing chimeric antigen receptor dendritic cells in any phrasing order must be captured."
       ],
-      "broad_query": "(\"CAR-DC\"[Title/Abstract] OR \"CAR-DCs\"[Title/Abstract] OR \"CAR DC\"[Title/Abstract] OR \"CAR DCs\"[Title/Abstract] OR \"CAR dendritic\"[Title/Abstract] OR \"CAR dendritic cell\"[Title/Abstract] OR \"CAR dendritic cells\"[Title/Abstract] OR \"CAR-engineered dendritic cell\"[Title/Abstract] OR \"CAR-engineered dendritic cells\"[Title/Abstract] OR \"CAR-modified dendritic cell\"[Title/Abstract] OR \"CAR-modified dendritic cells\"[Title/Abstract] OR \"CAR-transduced dendritic cell\"[Title/Abstract] OR \"CAR-transduced dendritic cells\"[Title/Abstract] OR \"dendritic cell CAR\"[Title/Abstract] OR \"dendritic cells CAR\"[Title/Abstract] OR \"dendritic cell expressing chimeric antigen receptor\"[Title/Abstract] OR \"dendritic cells expressing chimeric antigen receptors\"[Title/Abstract] OR \"chimeric antigen receptor dendritic cell\"[Title/Abstract] OR \"chimeric antigen receptor dendritic cells\"[Title/Abstract])",
-      "filtered_query": "((\"CAR-DC\"[Title/Abstract] OR \"CAR-DCs\"[Title/Abstract] OR \"CAR DC\"[Title/Abstract] OR \"CAR DCs\"[Title/Abstract] OR \"CAR dendritic\"[Title/Abstract] OR \"CAR dendritic cell\"[Title/Abstract] OR \"CAR dendritic cells\"[Title/Abstract] OR \"CAR-engineered dendritic cell\"[Title/Abstract] OR \"CAR-engineered dendritic cells\"[Title/Abstract] OR \"CAR-modified dendritic cell\"[Title/Abstract] OR \"CAR-modified dendritic cells\"[Title/Abstract] OR \"CAR-transduced dendritic cell\"[Title/Abstract] OR \"CAR-transduced dendritic cells\"[Title/Abstract] OR \"dendritic cell CAR\"[Title/Abstract] OR \"dendritic cells CAR\"[Title/Abstract] OR \"dendritic cell expressing chimeric antigen receptor\"[Title/Abstract] OR \"dendritic cells expressing chimeric antigen receptors\"[Title/Abstract] OR \"chimeric antigen receptor dendritic cell\"[Title/Abstract] OR \"chimeric antigen receptor dendritic cells\"[Title/Abstract])) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type]) NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
-      "attribution": {
-        "primary_title_abstract_phrases": [
-          "car-dc",
-          "car dc",
-          "car dendritic",
-          "car dendritic cell",
-          "car dendritic cells",
-          "car-engineered dendritic cell",
-          "car-engineered dendritic cells",
-          "car-modified dendritic cell",
-          "car-modified dendritic cells",
-          "car-transduced dendritic cell",
-          "car-transduced dendritic cells",
-          "dendritic cell car",
-          "dendritic cells car",
-          "dendritic cell expressing chimeric antigen receptor",
-          "dendritic cells expressing chimeric antigen receptors",
-          "chimeric antigen receptor dendritic",
-          "chimeric antigen receptor dendritic cell",
-          "chimeric antigen receptor dendritic cells"
-        ],
-        "secondary_cell_terms": [
-          "dendritic cell",
-          "dendritic cells",
-          "dc"
-        ],
-        "mesh_support_terms": [
-          "Dendritic Cells"
-        ],
-        "conflict_terms": {
-          "car_t": [
-            "car-t",
-            "car t cell",
-            "car t-cell",
-            "chimeric antigen receptor t cell"
-          ],
-          "car_nk": [
-            "car-nk",
-            "car nk cell",
-            "chimeric antigen receptor nk cell"
-          ]
-        }
-      }
+      "broad_query": "(\"CAR-DC\"[Title/Abstract] OR \"CAR-DCs\"[Title/Abstract] OR \"CAR dendritic cell\"[Title/Abstract] OR \"CAR dendritic cells\"[Title/Abstract] OR \"CAR-engineered dendritic cell\"[Title/Abstract] OR \"CAR-engineered dendritic cells\"[Title/Abstract] OR \"CAR-modified dendritic cell\"[Title/Abstract] OR \"CAR-modified dendritic cells\"[Title/Abstract] OR \"CAR-transduced dendritic cell\"[Title/Abstract] OR \"CAR-transduced dendritic cells\"[Title/Abstract] OR \"CAR-expressing dendritic cell\"[Title/Abstract] OR \"CAR-expressing dendritic cells\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"dendritic cell\"[Title/Abstract] OR \"dendritic cells\"[Title/Abstract])))",
+      "filtered_query": "(\"CAR-DC\"[Title/Abstract] OR \"CAR-DCs\"[Title/Abstract] OR \"CAR dendritic cell\"[Title/Abstract] OR \"CAR dendritic cells\"[Title/Abstract] OR \"CAR-engineered dendritic cell\"[Title/Abstract] OR \"CAR-engineered dendritic cells\"[Title/Abstract] OR \"CAR-modified dendritic cell\"[Title/Abstract] OR \"CAR-modified dendritic cells\"[Title/Abstract] OR \"CAR-transduced dendritic cell\"[Title/Abstract] OR \"CAR-transduced dendritic cells\"[Title/Abstract] OR \"CAR-expressing dendritic cell\"[Title/Abstract] OR \"CAR-expressing dendritic cells\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"dendritic cell\"[Title/Abstract] OR \"dendritic cells\"[Title/Abstract]))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])"
     },
     {
       "id": "car_mac",
       "label": "CAR-Mac",
       "description": "CAR macrophages and CAR-engineered macrophage studies.",
-      "query_notes": "Macrophage studies use both explicit CAR-Mac phrasing and broader engineered-macrophage language.",
+      "query_notes": "Part 1: exact compound phrases (CAR-Mac, CAR macrophage, CAR-M, etc.). Part 2: 'chimeric antigen receptor' full phrase AND macrophage terms. 'CAR-M' is kept despite ~13/66 noise hits because it captures ~7 core CAR-Mac papers and ~30 relevant reviews that use 'CAR-M' as shorthand for CAR-macrophage without the full phrase. Previous query used 'CAR'[tiab] AND macrophage which introduced ~500 noise records from CAR-T papers mentioning tumor-associated macrophages.",
       "must_hit_examples": [
         "Any paper explicitly using CAR macrophage or CAR-Mac in title or abstract must be captured.",
-        "Representative CAR macrophage translational studies should be checked during validation."
+        "Papers discussing chimeric antigen receptor macrophages in any phrasing order must be captured."
       ],
-      "broad_query": "(((\"CAR-Mac\"[Title/Abstract] OR \"CAR-Macs\"[Title/Abstract] OR \"CAR macrophage\"[Title/Abstract] OR \"CAR macrophages\"[Title/Abstract] OR \"CAR-engineered macrophage\"[Title/Abstract] OR \"CAR-engineered macrophages\"[Title/Abstract] OR \"CAR-modified macrophage\"[Title/Abstract] OR \"CAR-modified macrophages\"[Title/Abstract] OR \"CAR-expressing macrophage\"[Title/Abstract] OR \"CAR-expressing macrophages\"[Title/Abstract] OR \"chimeric antigen receptor macrophage\"[Title/Abstract] OR \"chimeric antigen receptor macrophages\"[Title/Abstract] OR \"chimeric antigen receptor-engineered macrophage\"[Title/Abstract] OR \"chimeric antigen receptor-engineered macrophages\"[Title/Abstract] OR \"chimeric antigen receptor-modified macrophage\"[Title/Abstract] OR \"chimeric antigen receptor-modified macrophages\"[Title/Abstract] OR \"macrophage engineered with chimeric antigen receptor\"[Title/Abstract] OR \"macrophages engineered with chimeric antigen receptors\"[Title/Abstract] OR \"macrophage expressing chimeric antigen receptor\"[Title/Abstract] OR \"macrophages expressing chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced macrophage\"[Title/Abstract] OR \"CAR-transduced macrophages\"[Title/Abstract])) OR (((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"CAR\"[Title/Abstract]) AND (macrophage[Title/Abstract] OR macrophages[Title/Abstract]))))",
-      "filtered_query": "((((\"CAR-Mac\"[Title/Abstract] OR \"CAR-Macs\"[Title/Abstract] OR \"CAR macrophage\"[Title/Abstract] OR \"CAR macrophages\"[Title/Abstract] OR \"CAR-engineered macrophage\"[Title/Abstract] OR \"CAR-engineered macrophages\"[Title/Abstract] OR \"CAR-modified macrophage\"[Title/Abstract] OR \"CAR-modified macrophages\"[Title/Abstract] OR \"CAR-expressing macrophage\"[Title/Abstract] OR \"CAR-expressing macrophages\"[Title/Abstract] OR \"chimeric antigen receptor macrophage\"[Title/Abstract] OR \"chimeric antigen receptor macrophages\"[Title/Abstract] OR \"chimeric antigen receptor-engineered macrophage\"[Title/Abstract] OR \"chimeric antigen receptor-engineered macrophages\"[Title/Abstract] OR \"chimeric antigen receptor-modified macrophage\"[Title/Abstract] OR \"chimeric antigen receptor-modified macrophages\"[Title/Abstract] OR \"macrophage engineered with chimeric antigen receptor\"[Title/Abstract] OR \"macrophages engineered with chimeric antigen receptors\"[Title/Abstract] OR \"macrophage expressing chimeric antigen receptor\"[Title/Abstract] OR \"macrophages expressing chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced macrophage\"[Title/Abstract] OR \"CAR-transduced macrophages\"[Title/Abstract])) OR (((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"CAR\"[Title/Abstract]) AND (macrophage[Title/Abstract] OR macrophages[Title/Abstract])))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type]) NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
-      "attribution": {
-        "primary_title_abstract_phrases": [
-          "car-mac",
-          "car macrophage",
-          "car macrophages",
-          "car-engineered macrophage",
-          "car-engineered macrophages",
-          "car-modified macrophage",
-          "car-modified macrophages",
-          "car-expressing macrophage",
-          "car-expressing macrophages",
-          "car-transduced macrophage",
-          "car-transduced macrophages",
-          "chimeric antigen receptor macrophage",
-          "chimeric antigen receptor macrophages",
-          "chimeric antigen receptor-engineered macrophage",
-          "chimeric antigen receptor-engineered macrophages",
-          "chimeric antigen receptor-modified macrophage",
-          "chimeric antigen receptor-modified macrophages",
-          "macrophage engineered with chimeric antigen receptor",
-          "macrophages engineered with chimeric antigen receptors",
-          "macrophage expressing chimeric antigen receptor",
-          "macrophages expressing chimeric antigen receptors"
-        ],
-        "secondary_cell_terms": [
-          "macrophage",
-          "macrophages",
-          "histiocyte",
-          "histiocytes"
-        ],
-        "mesh_support_terms": [
-          "Macrophages"
-        ],
-        "conflict_terms": {
-          "car_t": [
-            "car-t",
-            "car t cell",
-            "car t-cell",
-            "chimeric antigen receptor t cell"
-          ],
-          "car_nk": [
-            "car-nk",
-            "car nk cell",
-            "chimeric antigen receptor nk cell"
-          ]
-        }
-      }
+      "broad_query": "(\"CAR-Mac\"[Title/Abstract] OR \"CAR-Macs\"[Title/Abstract] OR \"CAR-M\"[Title/Abstract] OR \"CAR macrophage\"[Title/Abstract] OR \"CAR macrophages\"[Title/Abstract] OR \"CAR-engineered macrophage\"[Title/Abstract] OR \"CAR-engineered macrophages\"[Title/Abstract] OR \"CAR-modified macrophage\"[Title/Abstract] OR \"CAR-modified macrophages\"[Title/Abstract] OR \"CAR-expressing macrophage\"[Title/Abstract] OR \"CAR-expressing macrophages\"[Title/Abstract] OR \"CAR-transduced macrophage\"[Title/Abstract] OR \"CAR-transduced macrophages\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (macrophage[Title/Abstract] OR macrophages[Title/Abstract])))",
+      "filtered_query": "(\"CAR-Mac\"[Title/Abstract] OR \"CAR-Macs\"[Title/Abstract] OR \"CAR-M\"[Title/Abstract] OR \"CAR macrophage\"[Title/Abstract] OR \"CAR macrophages\"[Title/Abstract] OR \"CAR-engineered macrophage\"[Title/Abstract] OR \"CAR-engineered macrophages\"[Title/Abstract] OR \"CAR-modified macrophage\"[Title/Abstract] OR \"CAR-modified macrophages\"[Title/Abstract] OR \"CAR-expressing macrophage\"[Title/Abstract] OR \"CAR-expressing macrophages\"[Title/Abstract] OR \"CAR-transduced macrophage\"[Title/Abstract] OR \"CAR-transduced macrophages\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (macrophage[Title/Abstract] OR macrophages[Title/Abstract]))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])"
     },
     {
       "id": "car_mono",
       "label": "CAR-Mono",
       "description": "CAR monocytes and CAR-engineered monocyte studies.",
-      "query_notes": "Monocyte terminology is less standardized, so broad_query keeps a wider monocyte and monocytic vocabulary.",
+      "query_notes": "Part 1: exact compound phrases (CAR-Mono, CAR monocyte, etc.). Part 2: 'chimeric antigen receptor' full phrase AND monocyte/monocytic terms. Previous query required engineering verbs (engineered/modified/transduced/expressing) in the AND clause, which dropped recall from ~186 to 77.",
       "must_hit_examples": [
         "Any paper explicitly using CAR monocyte or CAR-Mono in title or abstract must be captured.",
-        "Validation should inspect overlap with macrophage and dendritic-cell papers."
+        "Papers discussing chimeric antigen receptor monocytes in any phrasing order must be captured."
       ],
-      "broad_query": "(((\"CAR-Mono\"[Title/Abstract] OR \"CAR-Monos\"[Title/Abstract] OR \"CAR Mono\"[Title/Abstract] OR \"CAR Monos\"[Title/Abstract] OR \"CAR-monocyte\"[Title/Abstract] OR \"CAR-monocytes\"[Title/Abstract] OR \"CAR monocyte\"[Title/Abstract] OR \"CAR monocytes\"[Title/Abstract] OR \"CAR monocytic\"[Title/Abstract] OR \"CAR monocytic cell\"[Title/Abstract] OR \"CAR monocytic cells\"[Title/Abstract] OR \"CAR-engineered monocyte\"[Title/Abstract] OR \"CAR-engineered monocytes\"[Title/Abstract] OR \"CAR-modified monocyte\"[Title/Abstract] OR \"CAR-modified monocytes\"[Title/Abstract] OR \"CAR-expressing monocyte\"[Title/Abstract] OR \"CAR-expressing monocytes\"[Title/Abstract] OR \"chimeric antigen receptor monocyte\"[Title/Abstract] OR \"chimeric antigen receptor monocytes\"[Title/Abstract] OR \"chimeric antigen receptor monocytic cell\"[Title/Abstract] OR \"chimeric antigen receptor monocytic cells\"[Title/Abstract] OR \"chimeric antigen receptor-engineered monocyte\"[Title/Abstract] OR \"chimeric antigen receptor-engineered monocytes\"[Title/Abstract] OR \"chimeric antigen receptor-modified monocyte\"[Title/Abstract] OR \"chimeric antigen receptor-modified monocytes\"[Title/Abstract] OR \"monocyte engineered with chimeric antigen receptor\"[Title/Abstract] OR \"monocytes engineered with chimeric antigen receptors\"[Title/Abstract] OR \"monocyte expressing chimeric antigen receptor\"[Title/Abstract] OR \"monocytes expressing chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced monocyte\"[Title/Abstract] OR \"CAR-transduced monocytes\"[Title/Abstract])) OR (((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract]) AND (monocyte[Title/Abstract] OR monocytes[Title/Abstract] OR monocytic[Title/Abstract] OR \"monocytic cell\"[Title/Abstract] OR \"monocytic cells\"[Title/Abstract]) AND (engineered[Title/Abstract] OR modified[Title/Abstract] OR transduced[Title/Abstract] OR expressing[Title/Abstract]))))",
-      "filtered_query": "((((\"CAR-Mono\"[Title/Abstract] OR \"CAR-Monos\"[Title/Abstract] OR \"CAR Mono\"[Title/Abstract] OR \"CAR Monos\"[Title/Abstract] OR \"CAR-monocyte\"[Title/Abstract] OR \"CAR-monocytes\"[Title/Abstract] OR \"CAR monocyte\"[Title/Abstract] OR \"CAR monocytes\"[Title/Abstract] OR \"CAR monocytic\"[Title/Abstract] OR \"CAR monocytic cell\"[Title/Abstract] OR \"CAR monocytic cells\"[Title/Abstract] OR \"CAR-engineered monocyte\"[Title/Abstract] OR \"CAR-engineered monocytes\"[Title/Abstract] OR \"CAR-modified monocyte\"[Title/Abstract] OR \"CAR-modified monocytes\"[Title/Abstract] OR \"CAR-expressing monocyte\"[Title/Abstract] OR \"CAR-expressing monocytes\"[Title/Abstract] OR \"chimeric antigen receptor monocyte\"[Title/Abstract] OR \"chimeric antigen receptor monocytes\"[Title/Abstract] OR \"chimeric antigen receptor monocytic cell\"[Title/Abstract] OR \"chimeric antigen receptor monocytic cells\"[Title/Abstract] OR \"chimeric antigen receptor-engineered monocyte\"[Title/Abstract] OR \"chimeric antigen receptor-engineered monocytes\"[Title/Abstract] OR \"chimeric antigen receptor-modified monocyte\"[Title/Abstract] OR \"chimeric antigen receptor-modified monocytes\"[Title/Abstract] OR \"monocyte engineered with chimeric antigen receptor\"[Title/Abstract] OR \"monocytes engineered with chimeric antigen receptors\"[Title/Abstract] OR \"monocyte expressing chimeric antigen receptor\"[Title/Abstract] OR \"monocytes expressing chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced monocyte\"[Title/Abstract] OR \"CAR-transduced monocytes\"[Title/Abstract])) OR (((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract]) AND (monocyte[Title/Abstract] OR monocytes[Title/Abstract] OR monocytic[Title/Abstract] OR \"monocytic cell\"[Title/Abstract] OR \"monocytic cells\"[Title/Abstract]) AND (engineered[Title/Abstract] OR modified[Title/Abstract] OR transduced[Title/Abstract] OR expressing[Title/Abstract])))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type]) NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
-      "attribution": {
-        "primary_title_abstract_phrases": [
-          "car-mono",
-          "car mono",
-          "car monocyte",
-          "car monocytes",
-          "car-monocyte",
-          "car-monocytes",
-          "car monocytic",
-          "car monocytic cell",
-          "car monocytic cells",
-          "car-engineered monocyte",
-          "car-engineered monocytes",
-          "car-modified monocyte",
-          "car-modified monocytes",
-          "car-expressing monocyte",
-          "car-expressing monocytes",
-          "car-transduced monocyte",
-          "car-transduced monocytes",
-          "chimeric antigen receptor monocyte",
-          "chimeric antigen receptor monocytes",
-          "chimeric antigen receptor monocytic cell",
-          "chimeric antigen receptor monocytic cells",
-          "chimeric antigen receptor-engineered monocyte",
-          "chimeric antigen receptor-engineered monocytes",
-          "chimeric antigen receptor-modified monocyte",
-          "chimeric antigen receptor-modified monocytes",
-          "monocyte engineered with chimeric antigen receptor",
-          "monocytes engineered with chimeric antigen receptors",
-          "monocyte expressing chimeric antigen receptor",
-          "monocytes expressing chimeric antigen receptors"
-        ],
-        "secondary_cell_terms": [
-          "monocyte",
-          "monocytes",
-          "monocytic"
-        ],
-        "mesh_support_terms": [
-          "Monocytes"
-        ],
-        "conflict_terms": {
-          "car_t": [
-            "car-t",
-            "car t cell",
-            "car t-cell",
-            "chimeric antigen receptor t cell"
-          ],
-          "car_nk": [
-            "car-nk",
-            "car nk cell",
-            "chimeric antigen receptor nk cell"
-          ]
-        }
-      }
+      "broad_query": "(\"CAR-Mono\"[Title/Abstract] OR \"CAR-monocyte\"[Title/Abstract] OR \"CAR-monocytes\"[Title/Abstract] OR \"CAR monocyte\"[Title/Abstract] OR \"CAR monocytes\"[Title/Abstract] OR \"CAR-engineered monocyte\"[Title/Abstract] OR \"CAR-engineered monocytes\"[Title/Abstract] OR \"CAR-modified monocyte\"[Title/Abstract] OR \"CAR-modified monocytes\"[Title/Abstract] OR \"CAR-expressing monocyte\"[Title/Abstract] OR \"CAR-expressing monocytes\"[Title/Abstract] OR \"CAR-transduced monocyte\"[Title/Abstract] OR \"CAR-transduced monocytes\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (monocyte[Title/Abstract] OR monocytes[Title/Abstract] OR monocytic[Title/Abstract])))",
+      "filtered_query": "(\"CAR-Mono\"[Title/Abstract] OR \"CAR-monocyte\"[Title/Abstract] OR \"CAR-monocytes\"[Title/Abstract] OR \"CAR monocyte\"[Title/Abstract] OR \"CAR monocytes\"[Title/Abstract] OR \"CAR-engineered monocyte\"[Title/Abstract] OR \"CAR-engineered monocytes\"[Title/Abstract] OR \"CAR-modified monocyte\"[Title/Abstract] OR \"CAR-modified monocytes\"[Title/Abstract] OR \"CAR-expressing monocyte\"[Title/Abstract] OR \"CAR-expressing monocytes\"[Title/Abstract] OR \"CAR-transduced monocyte\"[Title/Abstract] OR \"CAR-transduced monocytes\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (monocyte[Title/Abstract] OR monocytes[Title/Abstract] OR monocytic[Title/Abstract]))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])"
     },
     {
       "id": "car_t",
       "label": "CAR-T",
       "description": "CAR T-cell studies across the full PubMed history.",
-      "query_notes": "CAR-T requires high recall and explicit support for earlier terminology such as chimeric immune receptor and T-body.",
+      "query_notes": "Part 1: exact compound phrases (CAR-T, CAR T cell, etc.) plus historical terms (T-body, chimeric immune receptor). Part 2: 'chimeric antigen receptor' full phrase AND T cell / T lymphocyte terms. Previous query included 'CAR'[tiab] AND T cell which added ~6500 noise records.",
       "must_hit_examples": [
         "Early foundational CAR T-cell papers should be maintained as sentinel validation records.",
         "Any paper explicitly using CAR-T or chimeric antigen receptor T cell in title or abstract must be captured."
       ],
-      "broad_query": "(((\"CAR-T\"[Title/Abstract] OR \"CAR-Ts\"[Title/Abstract] OR \"CAR T-cell\"[Title/Abstract] OR \"CAR T-cells\"[Title/Abstract] OR \"CAR T cell\"[Title/Abstract] OR \"CAR T cells\"[Title/Abstract] OR \"CAR-T cell\"[Title/Abstract] OR \"CAR-T cells\"[Title/Abstract] OR \"CAR T therapy\"[Title/Abstract] OR \"CAR-T therapy\"[Title/Abstract] OR \"CAR T-cell therapy\"[Title/Abstract] OR \"CAR T cell therapy\"[Title/Abstract] OR \"CAR-T-cell therapy\"[Title/Abstract] OR \"CAR-T cell therapy\"[Title/Abstract] OR \"CAR-expressing T cell\"[Title/Abstract] OR \"CAR-expressing T cells\"[Title/Abstract] OR \"CAR-expressing T-cell\"[Title/Abstract] OR \"CAR-expressing T-cells\"[Title/Abstract] OR \"chimeric antigen receptor T cell\"[Title/Abstract] OR \"chimeric antigen receptor T cells\"[Title/Abstract] OR \"chimeric antigen receptor T-cell\"[Title/Abstract] OR \"chimeric antigen receptor T-cells\"[Title/Abstract] OR \"chimeric antigen receptor-transduced T cell\"[Title/Abstract] OR \"chimeric antigen receptor-transduced T cells\"[Title/Abstract] OR \"T cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"T-cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T-cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"T lymphocyte engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T lymphocytes engineered with chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced T lymphocyte\"[Title/Abstract] OR \"CAR-transduced T lymphocytes\"[Title/Abstract] OR \"CAR-redirected T cell\"[Title/Abstract] OR \"CAR-redirected T cells\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract])) OR ((((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract] OR \"CAR\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract]) AND (\"T cell\"[Title/Abstract] OR \"T cells\"[Title/Abstract] OR \"T-cell\"[Title/Abstract] OR \"T-cells\"[Title/Abstract] OR \"T lymphocyte\"[Title/Abstract] OR \"T lymphocytes\"[Title/Abstract]))))",
-      "filtered_query": "((((\"CAR-T\"[Title/Abstract] OR \"CAR-Ts\"[Title/Abstract] OR \"CAR T-cell\"[Title/Abstract] OR \"CAR T-cells\"[Title/Abstract] OR \"CAR T cell\"[Title/Abstract] OR \"CAR T cells\"[Title/Abstract] OR \"CAR-T cell\"[Title/Abstract] OR \"CAR-T cells\"[Title/Abstract] OR \"CAR T therapy\"[Title/Abstract] OR \"CAR-T therapy\"[Title/Abstract] OR \"CAR T-cell therapy\"[Title/Abstract] OR \"CAR T cell therapy\"[Title/Abstract] OR \"CAR-T-cell therapy\"[Title/Abstract] OR \"CAR-T cell therapy\"[Title/Abstract] OR \"CAR-expressing T cell\"[Title/Abstract] OR \"CAR-expressing T cells\"[Title/Abstract] OR \"CAR-expressing T-cell\"[Title/Abstract] OR \"CAR-expressing T-cells\"[Title/Abstract] OR \"chimeric antigen receptor T cell\"[Title/Abstract] OR \"chimeric antigen receptor T cells\"[Title/Abstract] OR \"chimeric antigen receptor T-cell\"[Title/Abstract] OR \"chimeric antigen receptor T-cells\"[Title/Abstract] OR \"chimeric antigen receptor-transduced T cell\"[Title/Abstract] OR \"chimeric antigen receptor-transduced T cells\"[Title/Abstract] OR \"T cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"T-cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T-cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"T lymphocyte engineered with chimeric antigen receptor\"[Title/Abstract] OR \"T lymphocytes engineered with chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced T lymphocyte\"[Title/Abstract] OR \"CAR-transduced T lymphocytes\"[Title/Abstract] OR \"CAR-redirected T cell\"[Title/Abstract] OR \"CAR-redirected T cells\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract])) OR ((((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract] OR \"CAR\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract]) AND (\"T cell\"[Title/Abstract] OR \"T cells\"[Title/Abstract] OR \"T-cell\"[Title/Abstract] OR \"T-cells\"[Title/Abstract] OR \"T lymphocyte\"[Title/Abstract] OR \"T lymphocytes\"[Title/Abstract])))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type]) NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
-      "attribution": {
-        "primary_title_abstract_phrases": [
-          "car-t",
-          "car t cell",
-          "car t-cell",
-          "car t therapy",
-          "chimeric antigen receptor t cell",
-          "chimeric antigen receptor t-cell",
-          "t-body",
-          "t-bodies"
-        ],
-        "secondary_cell_terms": [
-          "t cell",
-          "t cells",
-          "t-cell",
-          "t-cells",
-          "t lymphocyte"
-        ],
-        "mesh_support_terms": [
-          "T-Lymphocytes"
-        ],
-        "conflict_terms": {}
-      }
+      "broad_query": "(\"CAR-T\"[Title/Abstract] OR \"CAR-Ts\"[Title/Abstract] OR \"CAR T cell\"[Title/Abstract] OR \"CAR T cells\"[Title/Abstract] OR \"CAR T-cell\"[Title/Abstract] OR \"CAR T-cells\"[Title/Abstract] OR \"CAR-T cell\"[Title/Abstract] OR \"CAR-T cells\"[Title/Abstract] OR \"CAR T therapy\"[Title/Abstract] OR \"CAR-T therapy\"[Title/Abstract] OR \"CAR T-cell therapy\"[Title/Abstract] OR \"CAR T cell therapy\"[Title/Abstract] OR \"CAR-T-cell therapy\"[Title/Abstract] OR \"CAR-T cell therapy\"[Title/Abstract] OR \"CAR-expressing T cell\"[Title/Abstract] OR \"CAR-expressing T cells\"[Title/Abstract] OR \"CAR-expressing T-cell\"[Title/Abstract] OR \"CAR-expressing T-cells\"[Title/Abstract] OR \"CAR-transduced T cell\"[Title/Abstract] OR \"CAR-transduced T cells\"[Title/Abstract] OR \"CAR-transduced T lymphocyte\"[Title/Abstract] OR \"CAR-transduced T lymphocytes\"[Title/Abstract] OR \"CAR-redirected T cell\"[Title/Abstract] OR \"CAR-redirected T cells\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"T cell\"[Title/Abstract] OR \"T cells\"[Title/Abstract] OR \"T-cell\"[Title/Abstract] OR \"T-cells\"[Title/Abstract] OR \"T lymphocyte\"[Title/Abstract] OR \"T lymphocytes\"[Title/Abstract])))",
+      "filtered_query": "(\"CAR-T\"[Title/Abstract] OR \"CAR-Ts\"[Title/Abstract] OR \"CAR T cell\"[Title/Abstract] OR \"CAR T cells\"[Title/Abstract] OR \"CAR T-cell\"[Title/Abstract] OR \"CAR T-cells\"[Title/Abstract] OR \"CAR-T cell\"[Title/Abstract] OR \"CAR-T cells\"[Title/Abstract] OR \"CAR T therapy\"[Title/Abstract] OR \"CAR-T therapy\"[Title/Abstract] OR \"CAR T-cell therapy\"[Title/Abstract] OR \"CAR T cell therapy\"[Title/Abstract] OR \"CAR-T-cell therapy\"[Title/Abstract] OR \"CAR-T cell therapy\"[Title/Abstract] OR \"CAR-expressing T cell\"[Title/Abstract] OR \"CAR-expressing T cells\"[Title/Abstract] OR \"CAR-expressing T-cell\"[Title/Abstract] OR \"CAR-expressing T-cells\"[Title/Abstract] OR \"CAR-transduced T cell\"[Title/Abstract] OR \"CAR-transduced T cells\"[Title/Abstract] OR \"CAR-transduced T lymphocyte\"[Title/Abstract] OR \"CAR-transduced T lymphocytes\"[Title/Abstract] OR \"CAR-redirected T cell\"[Title/Abstract] OR \"CAR-redirected T cells\"[Title/Abstract] OR \"T-body\"[Title/Abstract] OR \"T-bodies\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"T cell\"[Title/Abstract] OR \"T cells\"[Title/Abstract] OR \"T-cell\"[Title/Abstract] OR \"T-cells\"[Title/Abstract] OR \"T lymphocyte\"[Title/Abstract] OR \"T lymphocytes\"[Title/Abstract]))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])"
     },
     {
       "id": "car_nk",
       "label": "CAR-NK",
       "description": "CAR natural killer cell studies across the full PubMed history.",
-      "query_notes": "CAR-NK literature mixes exact CAR-NK phrasing with broader natural-killer-cell engineering language.",
+      "query_notes": "Part 1: exact compound phrases (CAR-NK, CAR NK cell, NK-CAR, etc.). Part 2: 'chimeric antigen receptor' full phrase AND NK / natural killer cell terms.",
       "must_hit_examples": [
         "Any paper explicitly using CAR-NK or chimeric antigen receptor NK cell in title or abstract must be captured.",
         "Validation should include early and recent CAR NK engineering papers."
       ],
-      "broad_query": "(((\"CAR-NK\"[Title/Abstract] OR \"CAR-NKs\"[Title/Abstract] OR \"CAR NK\"[Title/Abstract] OR \"CAR NKs\"[Title/Abstract] OR \"CAR NK-cell\"[Title/Abstract] OR \"CAR NK-cells\"[Title/Abstract] OR \"CAR NK cell\"[Title/Abstract] OR \"CAR NK cells\"[Title/Abstract] OR \"CAR-expressing NK cell\"[Title/Abstract] OR \"CAR-expressing NK cells\"[Title/Abstract] OR \"CAR-expressing natural killer cell\"[Title/Abstract] OR \"CAR-expressing natural killer cells\"[Title/Abstract] OR \"chimeric antigen receptor NK cell\"[Title/Abstract] OR \"chimeric antigen receptor NK cells\"[Title/Abstract] OR \"chimeric antigen receptor NK-cell\"[Title/Abstract] OR \"chimeric antigen receptor NK-cells\"[Title/Abstract] OR \"chimeric antigen receptor natural killer cell\"[Title/Abstract] OR \"chimeric antigen receptor natural killer cells\"[Title/Abstract] OR \"natural killer cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"natural killer cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"NK cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"NK cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced natural killer cell\"[Title/Abstract] OR \"CAR-transduced natural killer cells\"[Title/Abstract] OR \"CAR-transduced NK cell\"[Title/Abstract] OR \"CAR-transduced NK cells\"[Title/Abstract] OR \"NK-CAR\"[Title/Abstract] OR \"NK-CARs\"[Title/Abstract])) OR ((((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract]) AND (\"NK cell\"[Title/Abstract] OR \"NK cells\"[Title/Abstract] OR \"NK-cell\"[Title/Abstract] OR \"NK-cells\"[Title/Abstract] OR \"natural killer cell\"[Title/Abstract] OR \"natural killer cells\"[Title/Abstract]) AND (engineered[Title/Abstract] OR modified[Title/Abstract] OR transduced[Title/Abstract] OR expressing[Title/Abstract]))))",
-      "filtered_query": "((((\"CAR-NK\"[Title/Abstract] OR \"CAR-NKs\"[Title/Abstract] OR \"CAR NK\"[Title/Abstract] OR \"CAR NKs\"[Title/Abstract] OR \"CAR NK-cell\"[Title/Abstract] OR \"CAR NK-cells\"[Title/Abstract] OR \"CAR NK cell\"[Title/Abstract] OR \"CAR NK cells\"[Title/Abstract] OR \"CAR-expressing NK cell\"[Title/Abstract] OR \"CAR-expressing NK cells\"[Title/Abstract] OR \"CAR-expressing natural killer cell\"[Title/Abstract] OR \"CAR-expressing natural killer cells\"[Title/Abstract] OR \"chimeric antigen receptor NK cell\"[Title/Abstract] OR \"chimeric antigen receptor NK cells\"[Title/Abstract] OR \"chimeric antigen receptor NK-cell\"[Title/Abstract] OR \"chimeric antigen receptor NK-cells\"[Title/Abstract] OR \"chimeric antigen receptor natural killer cell\"[Title/Abstract] OR \"chimeric antigen receptor natural killer cells\"[Title/Abstract] OR \"natural killer cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"natural killer cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"NK cell engineered with chimeric antigen receptor\"[Title/Abstract] OR \"NK cells engineered with chimeric antigen receptors\"[Title/Abstract] OR \"CAR-transduced natural killer cell\"[Title/Abstract] OR \"CAR-transduced natural killer cells\"[Title/Abstract] OR \"CAR-transduced NK cell\"[Title/Abstract] OR \"CAR-transduced NK cells\"[Title/Abstract] OR \"NK-CAR\"[Title/Abstract] OR \"NK-CARs\"[Title/Abstract])) OR ((((\"chimeric antigen receptor\"[Title/Abstract] OR \"chimeric antigen receptors\"[Title/Abstract] OR \"chimeric immune receptor\"[Title/Abstract] OR \"chimeric immune receptors\"[Title/Abstract]) AND (\"NK cell\"[Title/Abstract] OR \"NK cells\"[Title/Abstract] OR \"NK-cell\"[Title/Abstract] OR \"NK-cells\"[Title/Abstract] OR \"natural killer cell\"[Title/Abstract] OR \"natural killer cells\"[Title/Abstract]) AND (engineered[Title/Abstract] OR modified[Title/Abstract] OR transduced[Title/Abstract] OR expressing[Title/Abstract])))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type]) NOT (review[Title] OR editorial[Title] OR commentary[Title] OR comment[Title])",
-      "attribution": {
-        "primary_title_abstract_phrases": [
-          "car-nk",
-          "car nk",
-          "car nk cell",
-          "car nk-cell",
-          "car nk cells",
-          "car nk-cells",
-          "car-expressing nk cell",
-          "car-expressing nk cells",
-          "car-expressing natural killer cell",
-          "car-expressing natural killer cells",
-          "car-transduced natural killer cell",
-          "car-transduced natural killer cells",
-          "car-transduced nk cell",
-          "car-transduced nk cells",
-          "chimeric antigen receptor nk cell",
-          "chimeric antigen receptor nk cells",
-          "chimeric antigen receptor nk-cell",
-          "chimeric antigen receptor nk-cells",
-          "chimeric antigen receptor natural killer cell",
-          "chimeric antigen receptor natural killer cells",
-          "natural killer cell engineered with chimeric antigen receptor",
-          "natural killer cells engineered with chimeric antigen receptors",
-          "nk cell engineered with chimeric antigen receptor",
-          "nk cells engineered with chimeric antigen receptors",
-          "nk-car",
-          "nk-cars"
-        ],
-        "secondary_cell_terms": [
-          "nk cell",
-          "nk cells",
-          "nk-cell",
-          "nk-cells",
-          "natural killer cell",
-          "natural killer cells"
-        ],
-        "mesh_support_terms": [
-          "Killer Cells, Natural"
-        ],
-        "conflict_terms": {
-          "car_t": [
-            "car-t",
-            "car t cell",
-            "car t-cell",
-            "chimeric antigen receptor t cell"
-          ]
-        }
-      }
+      "broad_query": "(\"CAR-NK\"[Title/Abstract] OR \"CAR-NKs\"[Title/Abstract] OR \"CAR NK\"[Title/Abstract] OR \"CAR NK cell\"[Title/Abstract] OR \"CAR NK cells\"[Title/Abstract] OR \"CAR NK-cell\"[Title/Abstract] OR \"CAR NK-cells\"[Title/Abstract] OR \"CAR-expressing NK cell\"[Title/Abstract] OR \"CAR-expressing NK cells\"[Title/Abstract] OR \"CAR-expressing natural killer cell\"[Title/Abstract] OR \"CAR-expressing natural killer cells\"[Title/Abstract] OR \"CAR-transduced NK cell\"[Title/Abstract] OR \"CAR-transduced NK cells\"[Title/Abstract] OR \"CAR-transduced natural killer cell\"[Title/Abstract] OR \"CAR-transduced natural killer cells\"[Title/Abstract] OR \"NK-CAR\"[Title/Abstract] OR \"NK-CARs\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"NK cell\"[Title/Abstract] OR \"NK cells\"[Title/Abstract] OR \"NK-cell\"[Title/Abstract] OR \"NK-cells\"[Title/Abstract] OR \"natural killer cell\"[Title/Abstract] OR \"natural killer cells\"[Title/Abstract])))",
+      "filtered_query": "(\"CAR-NK\"[Title/Abstract] OR \"CAR-NKs\"[Title/Abstract] OR \"CAR NK\"[Title/Abstract] OR \"CAR NK cell\"[Title/Abstract] OR \"CAR NK cells\"[Title/Abstract] OR \"CAR NK-cell\"[Title/Abstract] OR \"CAR NK-cells\"[Title/Abstract] OR \"CAR-expressing NK cell\"[Title/Abstract] OR \"CAR-expressing NK cells\"[Title/Abstract] OR \"CAR-expressing natural killer cell\"[Title/Abstract] OR \"CAR-expressing natural killer cells\"[Title/Abstract] OR \"CAR-transduced NK cell\"[Title/Abstract] OR \"CAR-transduced NK cells\"[Title/Abstract] OR \"CAR-transduced natural killer cell\"[Title/Abstract] OR \"CAR-transduced natural killer cells\"[Title/Abstract] OR \"NK-CAR\"[Title/Abstract] OR \"NK-CARs\"[Title/Abstract] OR (\"chimeric antigen receptor\"[Title/Abstract] AND (\"NK cell\"[Title/Abstract] OR \"NK cells\"[Title/Abstract] OR \"NK-cell\"[Title/Abstract] OR \"NK-cells\"[Title/Abstract] OR \"natural killer cell\"[Title/Abstract] OR \"natural killer cells\"[Title/Abstract]))) NOT (Review[Publication Type] OR Systematic Review[Publication Type] OR Meta-Analysis[Publication Type] OR Editorial[Publication Type] OR Comment[Publication Type] OR Letter[Publication Type] OR News[Publication Type] OR Biography[Publication Type] OR Interview[Publication Type] OR Lecture[Publication Type] OR Guideline[Publication Type] OR Practice Guideline[Publication Type] OR Consensus Development Conference[Publication Type] OR Consensus Development Conference, NIH[Publication Type] OR Historical Article[Publication Type] OR Published Erratum[Publication Type] OR Retraction of Publication[Publication Type] OR Duplicate Publication[Publication Type])"
     }
   ]
 }

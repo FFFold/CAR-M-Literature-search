@@ -1,3 +1,5 @@
+import math
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -65,16 +67,28 @@ def collect_topic_records(
             query,
         )
 
+    topic_id = str(topic["id"])
+
     pmids = cached_pmids
     if pmids is None:
         pmids = esearch_all(query, api_key, search_batch_size, max_records)
         write_json(paths["pmids"], pmids)
 
+    total_batches = math.ceil(len(pmids) / fetch_batch_size) if pmids else 0
+    print(
+        f"  {topic_id}: {len(pmids)} PMIDs, fetching in {total_batches} batches...",
+        file=sys.stderr,
+    )
+
     raw_records: Dict[str, Dict[str, str]] = {}
-    for batch in chunked(pmids, fetch_batch_size):
+    for batch_idx, batch in enumerate(chunked(pmids, fetch_batch_size), start=1):
         detail_cache = batch_cache_path(paths["detail"], batch)
         detail_map = load_cached_mapping(detail_cache)
         if detail_map is None:
+            print(
+                f"  {topic_id}: batch {batch_idx}/{total_batches}...",
+                file=sys.stderr,
+            )
             detail_map = efetch_batch(batch, api_key)
             write_json(detail_cache, detail_map)
 
@@ -88,7 +102,7 @@ def collect_topic_records(
     }
     filtered_records, review_records = split_records_by_filter(screened_records)
 
-    write_json(paths["raw_records"], raw_records)
+    write_json(paths["raw_records"], screened_records)
     write_json(paths["filtered_records"], filtered_records)
     write_json(paths["review_records"], review_records)
     write_json(
@@ -100,7 +114,7 @@ def collect_topic_records(
             "query_mode": query_mode,
             "source_query": query,
             "pmid_count": len(pmids),
-            "raw_record_count": len(raw_records),
+            "raw_record_count": len(screened_records),
             "filtered_record_count": len(filtered_records),
             "review_record_count": len(review_records),
             "fetch_batch_size": fetch_batch_size,
@@ -110,4 +124,4 @@ def collect_topic_records(
         },
     )
 
-    return pmids, raw_records, filtered_records, review_records, query
+    return pmids, screened_records, filtered_records, review_records, query

@@ -42,13 +42,3 @@ NON_RESEARCH_PUBLICATION_TYPES = {
     "duplicate publication",
     "case reports",
 }
-
-NON_RESEARCH_TITLE_TERMS = (
-    "review",
-    "editorial",
-    "commentary",
-    "comment",
-    "perspective",
-    "perspectives",
-    "guideline",
-)

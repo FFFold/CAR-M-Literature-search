@@ -332,7 +332,7 @@ def run_topic_config(args: argparse.Namespace, api_key: Optional[str]) -> int:
             "contents": {
                 "pmids": "Cached PMID lists per topic/query.",
                 "detail": "Cached efetch batch responses.",
-                "raw_records": "Cached normalized topic records before filtering.",
+                "raw_records": "Cached normalized topic records with filter annotations.",
                 "filtered_records": "Cached topic records kept after filtering.",
                 "review_records": "Cached kept topic records flagged for manual review.",
             },
