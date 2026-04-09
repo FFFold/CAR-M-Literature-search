@@ -1,11 +1,12 @@
 import json
 import re
+import sys
 import time
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from .constants import (
     EUTILS_BASE,
@@ -16,19 +17,35 @@ from .constants import (
 from .utils import normalize_journal_name, normalize_whitespace
 
 
-def fetch_url(url: str) -> bytes:
+def fetch_url(url: str, post_data: Optional[bytes] = None) -> bytes:
+    """Fetch a URL with retries and exponential backoff.
+
+    Supports both GET and POST. Uses POST when post_data is provided,
+    which is useful for long queries that may exceed URL length limits.
+    """
     last_error: Optional[Exception] = None
     for attempt in range(REQUEST_RETRIES):
         try:
-            with urlopen(url, timeout=TIMEOUT_SECONDS) as response:
+            if post_data is not None:
+                req = Request(url, data=post_data)
+                req.add_header("Content-Type", "application/x-www-form-urlencoded")
+            else:
+                req = Request(url)
+            with urlopen(req, timeout=TIMEOUT_SECONDS) as response:
                 payload = response.read()
             time.sleep(REQUEST_SLEEP_SECONDS)
             return payload
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
             last_error = exc
             if attempt == REQUEST_RETRIES - 1:
                 break
-            time.sleep((attempt + 1) * REQUEST_SLEEP_SECONDS)
+            wait = REQUEST_SLEEP_SECONDS * (2 ** (attempt + 1))
+            print(
+                f"    network retry {attempt + 1}/{REQUEST_RETRIES - 1} "
+                f"({type(exc).__name__}), waiting {wait:.1f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
 
     if isinstance(last_error, HTTPError):
         raise RuntimeError(f"PubMed API HTTP error: {last_error.code}") from last_error
@@ -38,25 +55,66 @@ def fetch_url(url: str) -> bytes:
         ) from last_error
     if isinstance(last_error, TimeoutError):
         raise RuntimeError("PubMed API read timed out") from last_error
-    raise RuntimeError("PubMed API request failed")
+    raise RuntimeError(f"PubMed API request failed: {last_error}") from last_error
+
+
+def _eutils_request(
+    endpoint: str, params: Dict[str, str], use_post: bool = False
+) -> bytes:
+    """Send a request to the NCBI E-utilities API.
+
+    Uses POST when use_post is True or URL would exceed 2000 chars,
+    which avoids truncation for long queries.
+    """
+    url = f"{EUTILS_BASE}/{endpoint}"
+    encoded = urlencode(params)
+    if use_post or len(url) + 1 + len(encoded) > 2000:
+        return fetch_url(url, post_data=encoded.encode("utf-8"))
+    return fetch_url(f"{url}?{encoded}")
 
 
 def fetch_json(endpoint: str, params: Dict[str, str]) -> Dict:
-    url = f"{EUTILS_BASE}/{endpoint}?{urlencode(params)}"
-    payload = fetch_url(url)
-    try:
-        return json.loads(payload.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("PubMed API returned invalid JSON") from exc
+    """Fetch JSON from E-utilities with parse-level retries."""
+    last_error: Optional[Exception] = None
+    for attempt in range(REQUEST_RETRIES):
+        payload = _eutils_request(endpoint, params)
+        try:
+            return json.loads(payload.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt < REQUEST_RETRIES - 1:
+                wait = REQUEST_SLEEP_SECONDS * (2 ** (attempt + 1))
+                print(
+                    f"    parse retry {attempt + 1}/{REQUEST_RETRIES - 1} "
+                    f"(invalid JSON, got {len(payload)} bytes), waiting {wait:.1f}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+    raise RuntimeError(
+        f"PubMed API returned invalid JSON after {REQUEST_RETRIES} attempts"
+    ) from last_error
 
 
 def fetch_xml(endpoint: str, params: Dict[str, str]) -> ET.Element:
-    url = f"{EUTILS_BASE}/{endpoint}?{urlencode(params)}"
-    payload = fetch_url(url)
-    try:
-        return ET.fromstring(payload)
-    except ET.ParseError as exc:
-        raise RuntimeError("PubMed API returned invalid XML") from exc
+    """Fetch XML from E-utilities with parse-level retries."""
+    last_error: Optional[Exception] = None
+    for attempt in range(REQUEST_RETRIES):
+        payload = _eutils_request(endpoint, params)
+        try:
+            return ET.fromstring(payload)
+        except ET.ParseError as exc:
+            last_error = exc
+            if attempt < REQUEST_RETRIES - 1:
+                wait = REQUEST_SLEEP_SECONDS * (2 ** (attempt + 1))
+                print(
+                    f"    parse retry {attempt + 1}/{REQUEST_RETRIES - 1} "
+                    f"(invalid XML, got {len(payload)} bytes), waiting {wait:.1f}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+    raise RuntimeError(
+        f"PubMed API returned invalid XML after {REQUEST_RETRIES} attempts"
+    ) from last_error
 
 
 def esearch_page(
@@ -82,19 +140,49 @@ def esearch_page(
     return count, search_result.get("idlist", [])
 
 
+ESEARCH_MAX_RECORDS = 9999
+
+
 def esearch_all(
     query: str,
     api_key: Optional[str],
     batch_size: int,
     max_records: Optional[int],
 ) -> List[str]:
-    count, first_page = esearch_page(query, api_key, retstart=0, retmax=batch_size)
-    pmids = list(first_page)
+    """Retrieve all PMIDs matching a query.
 
-    target_count = count
+    PubMed esearch has a hard limit of 9999 records per search.  When the
+    total count exceeds this, the query is automatically split into yearly
+    date-range slices to work around the restriction.
+    """
+    # First, get the total count
+    total_count, _ = esearch_page(query, api_key, retstart=0, retmax=0)
+
+    target_count = total_count
     if max_records is not None:
         target_count = min(target_count, max_records)
-        pmids = pmids[:target_count]
+
+    if target_count <= ESEARCH_MAX_RECORDS:
+        return _esearch_simple(query, api_key, batch_size, target_count)
+
+    # Need to split by year to work around the 9999 limit
+    print(
+        f"    {total_count} results exceed esearch limit ({ESEARCH_MAX_RECORDS}), "
+        f"splitting by year...",
+        file=sys.stderr,
+    )
+    return _esearch_by_year(query, api_key, batch_size, max_records)
+
+
+def _esearch_simple(
+    query: str,
+    api_key: Optional[str],
+    batch_size: int,
+    target_count: int,
+) -> List[str]:
+    """Paginate through esearch results for queries within the 9999 limit."""
+    _, first_page = esearch_page(query, api_key, retstart=0, retmax=batch_size)
+    pmids = list(first_page)[:target_count]
 
     retstart = len(first_page)
     while len(pmids) < target_count:
@@ -109,6 +197,110 @@ def esearch_all(
             break
         pmids.extend(page)
         retstart += len(page)
+
+    return pmids[:target_count]
+
+
+def _esearch_by_year(
+    query: str,
+    api_key: Optional[str],
+    batch_size: int,
+    max_records: Optional[int],
+) -> List[str]:
+    """Split a large query into yearly date-range slices.
+
+    Uses PubMed date range filter to keep each slice under 9999.
+    Scans from the current year back to 1900.
+    """
+    import datetime
+
+    current_year = datetime.date.today().year
+    all_pmids: List[str] = []
+    seen: set = set()
+
+    for year in range(current_year, 1899, -1):
+        year_query = f'({query}) AND ("{year}/01/01"[Date - Publication] : "{year}/12/31"[Date - Publication])'
+        year_count, _ = esearch_page(year_query, api_key, retstart=0, retmax=0)
+        if year_count == 0:
+            continue
+
+        print(
+            f"    {year}: {year_count} records...",
+            file=sys.stderr,
+        )
+
+        if year_count > ESEARCH_MAX_RECORDS:
+            # Extremely rare: split further by month
+            for month in range(1, 13):
+                last_day = 28 if month == 2 else 30 if month in (4, 6, 9, 11) else 31
+                month_query = (
+                    f"({query}) AND "
+                    f'("{year}/{month:02d}/01"[Date - Publication] : '
+                    f'"{year}/{month:02d}/{last_day}"[Date - Publication])'
+                )
+                month_pmids = _esearch_simple(
+                    month_query,
+                    api_key,
+                    batch_size,
+                    min(ESEARCH_MAX_RECORDS, year_count),
+                )
+                for pmid in month_pmids:
+                    if pmid not in seen:
+                        seen.add(pmid)
+                        all_pmids.append(pmid)
+        else:
+            year_pmids = _esearch_simple(
+                year_query,
+                api_key,
+                batch_size,
+                year_count,
+            )
+            for pmid in year_pmids:
+                if pmid not in seen:
+                    seen.add(pmid)
+                    all_pmids.append(pmid)
+
+        if max_records is not None and len(all_pmids) >= max_records:
+            all_pmids = all_pmids[:max_records]
+            break
+
+    return all_pmids
+
+    # Page through using history server (no need to resend query)
+    import math
+
+    total_pages = math.ceil(target_count / batch_size)
+    page_num = 1
+
+    retstart = len(pmids)
+    while len(pmids) < target_count:
+        page_num += 1
+        remaining = target_count - len(pmids)
+        hist_params: Dict[str, str] = {
+            "db": "pubmed",
+            "retmode": "json",
+            "retstart": str(retstart),
+            "retmax": str(min(batch_size, remaining)),
+            "WebEnv": web_env,
+            "query_key": query_key,
+        }
+        if api_key:
+            hist_params["api_key"] = api_key
+
+        page_payload = fetch_json("esearch.fcgi", hist_params)
+        page_result = page_payload.get("esearchresult", {})
+        page_ids = page_result.get("idlist", [])
+        if not page_ids:
+            break
+        pmids.extend(page_ids)
+        retstart += len(page_ids)
+
+        if total_pages > 5 and page_num % 5 == 0:
+            print(
+                f"    esearch page {page_num}/{total_pages} "
+                f"({len(pmids)}/{target_count} PMIDs)...",
+                file=sys.stderr,
+            )
 
     return pmids[:target_count]
 

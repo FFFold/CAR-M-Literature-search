@@ -36,5 +36,5 @@ def apply_proxy_environment() -> None:
         env_values = load_env_file(env_path)
         for key_name in PROXY_KEY_NAMES:
             value = env_values.get(key_name)
-            if value and not os.environ.get(key_name):
+            if value:
                 os.environ[key_name] = value
