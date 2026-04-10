@@ -31,9 +31,12 @@ DISEASE_LABELS = (
     "other",
 )
 
+RELEVANCE_LABELS = ("relevant", "peripheral", "irrelevant")
+
 CONFIDENCE_LEVELS = ("high", "medium", "low")
 
 CLASSIFICATION_FIELDS = (
+    "relevance",
     "primary_mechanism",
     "secondary_mechanism",
     "disease_label",

@@ -6,7 +6,12 @@ need manual review.
 
 from typing import Dict, List, Tuple
 
-from .schema import CONFIDENCE_LEVELS, DISEASE_LABELS, MECHANISM_LABELS
+from .schema import (
+    CONFIDENCE_LEVELS,
+    DISEASE_LABELS,
+    MECHANISM_LABELS,
+    RELEVANCE_LABELS,
+)
 
 
 def validate_classification(
@@ -19,6 +24,19 @@ def validate_classification(
     """
     result = dict(classification)
     review_reasons: List[str] = []
+
+    # --- Validate relevance ---
+    rel = result.get("relevance", "").strip().lower()
+    if rel not in RELEVANCE_LABELS:
+        review_reasons.append(f"invalid_relevance:{rel}")
+        rel = "relevant"  # Default to relevant if unclear
+    result["relevance"] = rel
+
+    if rel == "irrelevant":
+        review_reasons.append("irrelevant_record")
+        result["confidence"] = "low"
+    elif rel == "peripheral":
+        review_reasons.append("peripheral_relevance")
 
     # --- Validate primary_mechanism ---
     pm = result.get("primary_mechanism", "").strip().lower()
@@ -69,7 +87,15 @@ def validate_classification(
     # --- Normalize reason ---
     result["reason"] = result.get("reason", "").strip()
 
-    return result, review_reasons
+    # Deduplicate review reasons
+    seen: set = set()
+    unique_reasons: List[str] = []
+    for r in review_reasons:
+        if r not in seen:
+            seen.add(r)
+            unique_reasons.append(r)
+
+    return result, unique_reasons
 
 
 def make_fallback_classification(
@@ -80,6 +106,7 @@ def make_fallback_classification(
     Used when the LLM returns nothing parseable after all retries.
     """
     result = {
+        "relevance": "relevant",
         "primary_mechanism": "other",
         "secondary_mechanism": "",
         "disease_label": "other",

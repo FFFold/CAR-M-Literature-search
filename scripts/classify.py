@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="LLM temperature (default: 0.1).",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of concurrent LLM calls (default: 1, serial).",
+    )
     return parser.parse_args()
 
 
@@ -186,6 +192,7 @@ def main() -> None:
         api_key=api_key,
         model=model,
         temperature=args.temperature,
+        workers=args.workers,
     )
 
     # Merge retrieval metadata with classification results
@@ -231,20 +238,32 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    irrelevant = sum(1 for r in merged if r.get("relevance") == "irrelevant")
+    peripheral = sum(1 for r in merged if r.get("relevance") == "peripheral")
+
     print(f"\nClassification complete.", file=sys.stderr)
     print(f"  Total records:   {len(merged)}", file=sys.stderr)
+    print(
+        f"  Relevant:        {len(merged) - irrelevant - peripheral}", file=sys.stderr
+    )
+    print(f"  Peripheral:      {peripheral}", file=sys.stderr)
+    print(f"  Irrelevant:      {irrelevant}", file=sys.stderr)
     print(f"  Needs review:    {len(review_rows)}", file=sys.stderr)
     print(f"  Output:          {args.output_dir}", file=sys.stderr)
 
 
 def build_summary(records: list[dict]) -> dict:
     """Build summary statistics from classified records."""
+    relevance_counts: dict[str, int] = {}
     mechanism_counts: dict[str, int] = {}
     disease_counts: dict[str, int] = {}
     confidence_counts: dict[str, int] = {}
     topic_counts: dict[str, int] = {}
 
     for r in records:
+        rel = r.get("relevance", "relevant")
+        relevance_counts[rel] = relevance_counts.get(rel, 0) + 1
+
         pm = r.get("primary_mechanism", "other")
         mechanism_counts[pm] = mechanism_counts.get(pm, 0) + 1
 
@@ -265,6 +284,7 @@ def build_summary(records: list[dict]) -> dict:
         "needs_review_count": sum(
             1 for r in records if r.get("needs_manual_review") == "true"
         ),
+        "relevance_counts": dict(sorted(relevance_counts.items())),
         "mechanism_counts": dict(sorted(mechanism_counts.items())),
         "disease_counts": dict(sorted(disease_counts.items())),
         "confidence_counts": dict(sorted(confidence_counts.items())),

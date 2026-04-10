@@ -8,6 +8,7 @@ from .schema import (
     CONFIDENCE_LEVELS,
     DISEASE_LABELS,
     MECHANISM_LABELS,
+    RELEVANCE_LABELS,
 )
 
 SYSTEM_PROMPT = (
@@ -19,6 +20,7 @@ Your task is to read a research article's metadata and assign structured labels.
 
 Return ONLY a single JSON object with these fields:
 {
+  "relevance": "<relevant|peripheral|irrelevant>",
   "primary_mechanism": "<mechanism label>",
   "secondary_mechanism": "<mechanism label or empty string>",
   "disease_label": "<disease label>",
@@ -26,6 +28,15 @@ Return ONLY a single JSON object with these fields:
   "confidence": "<high|medium|low>",
   "reason": "<1-2 sentence evidence-based justification>"
 }
+
+## Relevance assessment
+
+First, judge whether this paper genuinely belongs to the matched CAR cell therapy topic(s):
+- `relevant`: the paper is directly about CAR-engineered cells of the matched type (e.g., a CAR-T paper matched under car_t)
+- `peripheral`: the paper mentions the CAR platform or cell type but is not primarily about it (e.g., a general immunotherapy review that briefly mentions CAR-T, or a CAR-T paper matched under car_mac because it discusses tumor-associated macrophages)
+- `irrelevant`: the paper is a false positive — it matched the query due to keyword overlap but has nothing to do with CAR cell therapy for the matched topic
+
+If relevance is `irrelevant`, still fill in the other fields with your best guess, but set confidence to `low`.
 
 ## Mechanism labels (pick exactly one for primary_mechanism)
 
@@ -112,10 +123,8 @@ def parse_llm_response(raw_text: str) -> Optional[Dict[str, str]]:
 
     # Strip markdown code fences if present
     if "```" in text:
-        # Find content between first ``` and last ```
         parts = text.split("```")
         for part in parts[1:]:
-            # Skip the language tag line (e.g., "json\n")
             candidate = part.strip()
             if candidate.lower().startswith("json"):
                 candidate = candidate[4:].strip()
