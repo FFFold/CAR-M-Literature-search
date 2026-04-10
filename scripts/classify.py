@@ -160,6 +160,11 @@ def main() -> None:
     if not model:
         print("Error: LLM_MODEL not configured.", file=sys.stderr)
         sys.exit(1)
+    if not api_key:
+        print(
+            "Warning: LLM_API_KEY is empty. Requests may fail if the API requires authentication.",
+            file=sys.stderr,
+        )
 
     print(f"LLM API: {api_base}", file=sys.stderr)
     print(f"Model:   {model}", file=sys.stderr)

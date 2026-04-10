@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Optional
 
 from .cache import (
     classification_cache_dir,
@@ -45,41 +45,39 @@ def classify_records(
         if cached is not None:
             results[pmid] = cached
             cached_count += 1
-            continue
-
-        # Call LLM
-        classification = _classify_single(
-            record,
-            api_base,
-            api_key,
-            model,
-            temperature,
-            max_tokens,
-        )
-
-        if classification is not None:
-            validated, review_reasons = validate_classification(
-                record,
-                classification,
-            )
-            classified_count += 1
         else:
-            validated, review_reasons = make_fallback_classification(record)
-            failed_count += 1
+            # Call LLM
+            classification = _classify_single(
+                record,
+                api_base,
+                api_key,
+                model,
+                temperature,
+                max_tokens,
+            )
 
-        # Add review metadata
-        validated["needs_manual_review"] = "true" if review_reasons else "false"
-        validated["review_reasons"] = "; ".join(review_reasons)
+            if classification is not None:
+                validated, review_reasons = validate_classification(
+                    record,
+                    classification,
+                )
+                classified_count += 1
+            else:
+                validated, review_reasons = make_fallback_classification(record)
+                failed_count += 1
 
-        # Cache the result
-        save_classification(cache_dir, pmid, validated)
-        results[pmid] = validated
+            # Add review metadata
+            validated["needs_manual_review"] = "true" if review_reasons else "false"
+            validated["review_reasons"] = "; ".join(review_reasons)
 
-        # Progress reporting
-        done = cached_count + classified_count + failed_count
-        if done % 50 == 0 or done == total:
+            # Cache the result
+            save_classification(cache_dir, pmid, validated)
+            results[pmid] = validated
+
+        # Progress reporting (includes cache hits)
+        if i % 100 == 0 or i == total:
             print(
-                f"  Progress: {done}/{total} "
+                f"  Progress: {i}/{total} "
                 f"(cached={cached_count}, classified={classified_count}, "
                 f"failed={failed_count})",
                 file=sys.stderr,
@@ -101,7 +99,7 @@ def _classify_single(
     model: str,
     temperature: float,
     max_tokens: int,
-) -> Dict[str, str] | None:
+) -> Optional[Dict[str, str]]:
     """Classify a single record via the LLM API."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
