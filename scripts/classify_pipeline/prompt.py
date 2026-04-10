@@ -9,6 +9,7 @@ from .schema import (
     DISEASE_LABELS,
     MECHANISM_LABELS,
     RELEVANCE_LABELS,
+    TOPIC_LABELS,
 )
 
 SYSTEM_PROMPT = (
@@ -20,6 +21,7 @@ Your task is to read a research article's metadata and assign structured labels.
 
 Return ONLY a single JSON object with these fields:
 {
+  "primary_topic": "<car_dc|car_mac|car_mono|car_t|car_nk>",
   "relevance": "<relevant|peripheral|irrelevant>",
   "primary_mechanism": "<mechanism label>",
   "secondary_mechanism": "<mechanism label or empty string>",
@@ -29,12 +31,27 @@ Return ONLY a single JSON object with these fields:
   "reason": "<1-2 sentence evidence-based justification>"
 }
 
+## Primary topic assignment
+
+A paper may be matched by multiple topic queries. You must determine the ONE primary topic based on the paper's actual content:
+- `car_dc`: the paper is primarily about CAR-engineered dendritic cells
+- `car_mac`: the paper is primarily about CAR-engineered macrophages
+- `car_mono`: the paper is primarily about CAR-engineered monocytes
+- `car_t`: the paper is primarily about CAR T cells
+- `car_nk`: the paper is primarily about CAR natural killer cells
+
+Rules:
+- Choose based on which CAR cell type the paper ACTUALLY studies, not which queries happened to match it.
+- If the paper studies CAR-T cells but also mentions macrophages in the tumor microenvironment, primary_topic is `car_t`.
+- If the paper is a general CAR platform/engineering study not specific to one cell type, choose the cell type most central to the experiments.
+- If the paper primarily discusses both CAR-T and CAR-NK equally, prefer the cell type that is the main experimental subject.
+
 ## Relevance assessment
 
-First, judge whether this paper genuinely belongs to the matched CAR cell therapy topic(s):
-- `relevant`: the paper is directly about CAR-engineered cells of the matched type (e.g., a CAR-T paper matched under car_t)
-- `peripheral`: the paper mentions the CAR platform or cell type but is not primarily about it (e.g., a general immunotherapy review that briefly mentions CAR-T, or a CAR-T paper matched under car_mac because it discusses tumor-associated macrophages)
-- `irrelevant`: the paper is a false positive — it matched the query due to keyword overlap but has nothing to do with CAR cell therapy for the matched topic
+Judge whether this paper genuinely belongs to any CAR cell therapy topic:
+- `relevant`: the paper is directly about CAR-engineered cells
+- `peripheral`: the paper mentions CAR technology but is not primarily about it (e.g., a general immunotherapy review that briefly mentions CAR-T)
+- `irrelevant`: the paper is a false positive — it matched the query due to keyword overlap but has nothing to do with CAR cell therapy
 
 If relevance is `irrelevant`, still fill in the other fields with your best guess, but set confidence to `low`.
 
@@ -95,7 +112,6 @@ def build_user_message(record: Dict[str, str]) -> str:
     ]
     abstract = record.get("abstract", "").strip()
     if abstract:
-        # Truncate very long abstracts to stay within context limits
         if len(abstract) > 4000:
             abstract = abstract[:4000] + "... [truncated]"
         parts.append(f"Abstract: {abstract}")

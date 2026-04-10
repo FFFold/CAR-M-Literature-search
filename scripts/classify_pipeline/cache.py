@@ -9,7 +9,7 @@ def classification_cache_dir(output_dir: Path) -> Path:
     return output_dir / "cache" / "classifications"
 
 
-REQUIRED_CACHE_FIELDS = ("primary_mechanism", "relevance")
+REQUIRED_CACHE_FIELDS = ("primary_mechanism", "relevance", "primary_topic")
 
 
 def load_cached_classification(cache_dir: Path, pmid: str) -> Optional[Dict[str, str]]:

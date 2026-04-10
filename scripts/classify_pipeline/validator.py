@@ -11,6 +11,7 @@ from .schema import (
     DISEASE_LABELS,
     MECHANISM_LABELS,
     RELEVANCE_LABELS,
+    TOPIC_LABELS,
 )
 
 
@@ -24,6 +25,25 @@ def validate_classification(
     """
     result = dict(classification)
     review_reasons: List[str] = []
+
+    # --- Validate primary_topic ---
+    pt = result.get("primary_topic", "").strip().lower()
+    if pt not in TOPIC_LABELS:
+        # Try to infer from matched_topics if LLM gave invalid value
+        matched = [
+            t.strip().lower()
+            for t in record.get("matched_topics", "").split(";")
+            if t.strip().lower() in TOPIC_LABELS
+        ]
+        if len(matched) == 1:
+            pt = matched[0]
+        elif matched:
+            pt = matched[0]  # First matched topic as fallback
+            review_reasons.append(f"inferred_primary_topic:{pt}")
+        else:
+            pt = "car_t"  # Ultimate fallback
+            review_reasons.append("unknown_primary_topic")
+    result["primary_topic"] = pt
 
     # --- Validate relevance ---
     rel = result.get("relevance", "").strip().lower()
@@ -105,7 +125,16 @@ def make_fallback_classification(
 
     Used when the LLM returns nothing parseable after all retries.
     """
+    # Infer primary_topic from matched_topics
+    matched = [
+        t.strip().lower()
+        for t in record.get("matched_topics", "").split(";")
+        if t.strip()
+    ]
+    primary_topic = matched[0] if matched else "car_t"
+
     result = {
+        "primary_topic": primary_topic,
         "relevance": "relevant",
         "primary_mechanism": "other",
         "secondary_mechanism": "",

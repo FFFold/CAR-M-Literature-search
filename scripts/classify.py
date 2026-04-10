@@ -254,13 +254,18 @@ def main() -> None:
 
 def build_summary(records: list[dict]) -> dict:
     """Build summary statistics from classified records."""
+    primary_topic_counts: dict[str, int] = {}
     relevance_counts: dict[str, int] = {}
     mechanism_counts: dict[str, int] = {}
     disease_counts: dict[str, int] = {}
     confidence_counts: dict[str, int] = {}
-    topic_counts: dict[str, int] = {}
+    matched_topic_counts: dict[str, int] = {}
 
     for r in records:
+        pt = r.get("primary_topic", "")
+        if pt:
+            primary_topic_counts[pt] = primary_topic_counts.get(pt, 0) + 1
+
         rel = r.get("relevance", "relevant")
         relevance_counts[rel] = relevance_counts.get(rel, 0) + 1
 
@@ -277,18 +282,19 @@ def build_summary(records: list[dict]) -> dict:
         for t in topics.split(";"):
             t = t.strip()
             if t:
-                topic_counts[t] = topic_counts.get(t, 0) + 1
+                matched_topic_counts[t] = matched_topic_counts.get(t, 0) + 1
 
     return {
         "total_records": len(records),
         "needs_review_count": sum(
             1 for r in records if r.get("needs_manual_review") == "true"
         ),
+        "primary_topic_counts": dict(sorted(primary_topic_counts.items())),
         "relevance_counts": dict(sorted(relevance_counts.items())),
         "mechanism_counts": dict(sorted(mechanism_counts.items())),
         "disease_counts": dict(sorted(disease_counts.items())),
         "confidence_counts": dict(sorted(confidence_counts.items())),
-        "topic_counts": dict(sorted(topic_counts.items())),
+        "matched_topic_counts": dict(sorted(matched_topic_counts.items())),
     }
 
 

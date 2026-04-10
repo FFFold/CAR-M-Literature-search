@@ -5,6 +5,8 @@ rules validator accept.  Adding a new label here automatically makes it
 valid throughout the pipeline.
 """
 
+TOPIC_LABELS = ("car_dc", "car_mac", "car_mono", "car_t", "car_nk")
+
 MECHANISM_LABELS = (
     "cytotoxic_killing",
     "phagocytosis",
@@ -36,6 +38,7 @@ RELEVANCE_LABELS = ("relevant", "peripheral", "irrelevant")
 CONFIDENCE_LEVELS = ("high", "medium", "low")
 
 CLASSIFICATION_FIELDS = (
+    "primary_topic",
     "relevance",
     "primary_mechanism",
     "secondary_mechanism",
