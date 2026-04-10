@@ -9,15 +9,23 @@ def classification_cache_dir(output_dir: Path) -> Path:
     return output_dir / "cache" / "classifications"
 
 
+REQUIRED_CACHE_FIELDS = ("primary_mechanism", "relevance")
+
+
 def load_cached_classification(cache_dir: Path, pmid: str) -> Optional[Dict[str, str]]:
-    """Load a cached classification result for a single PMID."""
+    """Load a cached classification result for a single PMID.
+
+    Returns None if the cache file is missing, corrupt, or was written
+    by an older schema version that lacks required fields (e.g. relevance).
+    This forces re-classification with the current schema.
+    """
     path = cache_dir / f"{pmid}.json"
     if not path.exists():
         return None
     try:
         text = path.read_text(encoding="utf-8")
         data = json.loads(text)
-        if isinstance(data, dict) and "primary_mechanism" in data:
+        if isinstance(data, dict) and all(f in data for f in REQUIRED_CACHE_FIELDS):
             return data
     except (json.JSONDecodeError, OSError):
         pass

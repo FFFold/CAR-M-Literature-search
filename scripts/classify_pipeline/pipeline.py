@@ -76,24 +76,34 @@ def classify_records(
         nonlocal classified_count, failed_count
         record = records[pmid]
 
-        classification = _classify_single(
-            record,
-            api_base,
-            api_key,
-            model,
-            temperature,
-            max_tokens,
-        )
-
-        if classification is not None:
-            validated, review_reasons = validate_classification(
+        try:
+            classification = _classify_single(
                 record,
-                classification,
+                api_base,
+                api_key,
+                model,
+                temperature,
+                max_tokens,
             )
-            with lock:
-                classified_count += 1
-        else:
+
+            if classification is not None:
+                validated, review_reasons = validate_classification(
+                    record,
+                    classification,
+                )
+                with lock:
+                    classified_count += 1
+            else:
+                validated, review_reasons = make_fallback_classification(record)
+                with lock:
+                    failed_count += 1
+        except Exception as exc:
+            print(
+                f"    Unexpected error for PMID {pmid}: {exc}",
+                file=sys.stderr,
+            )
             validated, review_reasons = make_fallback_classification(record)
+            review_reasons.append(f"unexpected_error:{type(exc).__name__}")
             with lock:
                 failed_count += 1
 
@@ -124,15 +134,11 @@ def classify_records(
             file=sys.stderr,
         )
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
-            futures = {pool.submit(_process_one, pmid): pmid for pmid in uncached_pmids}
+            futures = [pool.submit(_process_one, pmid) for pmid in uncached_pmids]
             for future in as_completed(futures):
-                exc = future.exception()
-                if exc is not None:
-                    pmid = futures[future]
-                    print(
-                        f"    Unexpected error for PMID {pmid}: {exc}",
-                        file=sys.stderr,
-                    )
+                # Exceptions are handled inside _process_one;
+                # this ensures we don't silently swallow truly unexpected ones.
+                future.result()
 
     print(
         f"  Classification complete: {total} records "
