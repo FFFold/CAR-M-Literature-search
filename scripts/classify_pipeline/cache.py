@@ -53,7 +53,7 @@ def load_all_cached(cache_dir: Path) -> Dict[str, Dict[str, str]]:
         pmid = path.stem
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "primary_mechanism" in data:
+            if isinstance(data, dict) and all(f in data for f in REQUIRED_CACHE_FIELDS):
                 results[pmid] = data
         except (json.JSONDecodeError, OSError):
             continue

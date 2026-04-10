@@ -129,7 +129,7 @@ def make_fallback_classification(
     matched = [
         t.strip().lower()
         for t in record.get("matched_topics", "").split(";")
-        if t.strip()
+        if t.strip().lower() in TOPIC_LABELS
     ]
     primary_topic = matched[0] if matched else "car_t"
 
