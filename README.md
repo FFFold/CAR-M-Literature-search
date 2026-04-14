@@ -1,4 +1,4 @@
-# CAR-M Literature Search
+# CAR Literature Search Pipeline
 
 PubMed retrieval and LLM classification pipeline for CAR literature across five topic groups:
 
@@ -30,6 +30,15 @@ This repository is designed to support a reproducible CAR literature workflow th
 5. Export a final CSV for downstream analysis.
 
 Journal impact factor is intentionally out of scope for the current implementation. Journal names are normalized now so external metrics can be joined later.
+
+## Current Corpus Snapshot
+
+Using the current query set and retrieval pipeline, the merged filtered corpus contains:
+
+- 10,772 merged research records after de-duplication
+- 896 records matched by more than one topic query
+- LLM-based `primary_topic` assignment to collapse multi-topic matches into one main topic
+- `relevance` tagging to identify peripheral and clearly irrelevant false-positive matches
 
 ## Repository Layout
 
@@ -165,8 +174,27 @@ The classification layer includes:
 - per-PMID cache files for resume
 - LLM network retries
 - JSON parse retries when the model returns malformed output
+- optional multi-worker concurrency via `--workers`
 - rules-based validation and normalization
 - review routing for low-confidence, peripheral, irrelevant, missing-abstract, and inconsistent outputs
+- automatic cache invalidation when the classification schema changes
+
+### Why `primary_topic` exists
+
+Many records match more than one topic query, especially combinations such as:
+
+- `car_t` + `car_nk`
+- `car_t` + `car_mac`
+- `car_t` + `car_dc`
+
+The retrieval layer intentionally preserves all matched topic memberships in `matched_topics`. The classification layer then assigns a single `primary_topic` based on the actual experimental focus of the paper.
+
+Examples:
+
+- a CAR-T paper that discusses tumor-associated macrophages still gets `primary_topic=car_t`
+- a CAR-NK engineering paper that also mentions CAR-T comparisons gets `primary_topic=car_nk`
+- a general review that only briefly mentions CAR platforms may be marked `relevance=peripheral`
+- a keyword false positive can be marked `relevance=irrelevant`
 
 ### Main classification outputs
 
@@ -177,6 +205,19 @@ The classification phase writes into the selected output directory, for example 
 - `manual_review_records.csv`
 - `classification_summary.json`
 - `cache/classifications/`
+
+The final CSV includes both retrieval metadata and semantic labels, including:
+
+- `primary_topic`
+- `relevance`
+- `primary_mechanism`
+- `secondary_mechanism`
+- `disease_label`
+- `disease_detail`
+- `confidence`
+- `reason`
+- `needs_manual_review`
+- `review_reasons`
 
 ## Label Schemas
 
@@ -247,12 +288,13 @@ The repository currently supports:
 
 - full-history PubMed retrieval with resume support
 - merged topic-level corpus generation
-- LLM-based semantic classification with cache and review routing
+- LLM-based semantic classification with cache, retry, review routing, and concurrency support
+- single-label `primary_topic` assignment for multi-topic records
+- `relevance` classification to isolate peripheral and irrelevant matches
 - CSV/JSON export for downstream analysis
 
 ## Next Useful Improvements
 
-- add a formal `LICENSE`
 - add a compact sample dataset or fixture set that does not include large generated outputs
 - add optional notebook/reporting layer for downstream analysis
 - add a post-processing step that separates `relevant` records from `peripheral` / `irrelevant` records for final release tables
